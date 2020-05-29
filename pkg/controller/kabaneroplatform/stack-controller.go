@@ -5,16 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
-	mfc "github.com/manifestival/controller-runtime-client"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	mf "github.com/manifestival/manifestival"
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	rlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-var sclog = rlog.Log.WithName("stack-controller-install")
+var sclog = ologger.NewOperatorlogger("controller.kabaneroplatform.stack-controller")
 
 const (
 	scVersionSoftCompName   = "stack-controller"
@@ -24,21 +22,20 @@ const (
 )
 
 // Installs the Kabanero stack controller.
-func reconcileStackController(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, _ logr.Logger) error {
-	logger := sclog.WithValues("Kabanero instance namespace", k.Namespace, "Kabanero instance Name", k.Name)
-	logger.Info("Reconciling Kabanero stack controller installation.")
+func reconcileStackController(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
+	sclog.Info(fmt.Sprintf("Reconciling Kabanero stack controller installation. Kabanero instance namespace: %v. Kabanero instance Name: %v", k.Namespace, k.Name))
 
 	// Deploy the Kabanero stack operator.
 	rev, err := resolveSoftwareRevision(k, scVersionSoftCompName, k.Spec.StackController.Version)
 	if err != nil {
-		logger.Error(err, "Kabanero stack controller deployment failed. Unable to resolve software revision.")
+		sclog.Error(err, "Kabanero stack controller deployment failed. Unable to resolve software revision.")
 		return err
 	}
 
 	templateCtx := rev.Identifiers
 	image, err := imageUriWithOverrides(k.Spec.StackController.Repository, k.Spec.StackController.Tag, k.Spec.StackController.Image, rev)
 	if err != nil {
-		logger.Error(err, "Kabanero stack controller deployment failed. Unable to process image overrides.")
+		sclog.Error(err, "Kabanero stack controller deployment failed. Unable to process image overrides.")
 		return err
 	}
 	templateCtx["image"] = image
@@ -55,7 +52,8 @@ func reconcileStackController(ctx context.Context, k *kabanerov1alpha2.Kabanero,
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	//mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), sclog)
 	if err != nil {
 		return err
 	}
@@ -91,7 +89,8 @@ func reconcileStackController(ctx context.Context, k *kabanerov1alpha2.Kabanero,
 		return err
 	}
 
-	mOrig, err = mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	//mOrig, err = mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	mOrig, err = ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), sclog)
 	if err != nil {
 		return err
 	}
@@ -107,8 +106,7 @@ func reconcileStackController(ctx context.Context, k *kabanerov1alpha2.Kabanero,
 // Removes the cross-namespace objects created during the stack controller
 // deployment.
 func cleanupStackController(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
-	logger := sclog.WithValues("Kabanero instance namespace", k.Namespace, "Kabanero instance Name", k.Name)
-	logger.Info("Removing Kabanero stack controller installation.")
+	sclog.Info(fmt.Sprintf("Removing Kabanero stack controller installation. Kabanero instance namespace: %v. Kabanero instance Name: %v", k.Namespace, k.Name))
 
 	// First, we need to delete all of the stacks that we own.  We must do this first, to let the
 	// stack controller run its finalizer for all of the stacks, before deleting the
@@ -128,7 +126,7 @@ func cleanupStackController(ctx context.Context, k *kabanerov1alpha2.Kabanero, c
 					err = c.Delete(ctx, &stack)
 					if err != nil {
 						// Just log the error... but continue on to the next object.
-						logger.Error(err, "Unable to delete stack %v", stack.Name)
+						sclog.Error(err, fmt.Sprintf("Unable to delete stack %v", stack.Name))
 					}
 				}
 			}
@@ -145,7 +143,7 @@ func cleanupStackController(ctx context.Context, k *kabanerov1alpha2.Kabanero, c
 	// deleted, because of the OwnerReference in those objects.
 	rev, err := resolveSoftwareRevision(k, scVersionSoftCompName, k.Spec.StackController.Version)
 	if err != nil {
-		logger.Error(err, "Unable to resolve software revision.")
+		sclog.Error(err, "Unable to resolve software revision.")
 		return err
 	}
 
@@ -163,7 +161,8 @@ func cleanupStackController(ctx context.Context, k *kabanerov1alpha2.Kabanero, c
 		return err
 	}
 
-	m, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	//m, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	m, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), sclog)
 	if err != nil {
 		return err
 	}

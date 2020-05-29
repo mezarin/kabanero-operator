@@ -11,10 +11,13 @@ import (
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
 
 	kutils "github.com/kabanero-io/kabanero-operator/pkg/controller/kabaneroplatform/utils"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
+
+var ovwlog = ologger.NewOperatorlogger("webhook.kabanero.v1alpha2.validatingwebhook")
 
 // Builds the webhook for the manager to register
 func BuildValidatingWebhook(mgr *manager.Manager) *admission.Webhook {

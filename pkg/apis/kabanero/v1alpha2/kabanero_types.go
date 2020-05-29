@@ -48,6 +48,13 @@ type KabaneroSpec struct {
 	Sso SsoCustomizationSpec `json:"sso,omitempty"`
 
 	Gitops GitopsSpec `json:"gitops,omitempty"`
+
+	Trace TraceSpec `json:"trace,omitempty"`
+}
+
+// TraceSpec defines logging customization entries.
+type TraceSpec struct {
+	Spec string `json:"spec,omitempty"`
 }
 
 type GitopsSpec struct {
@@ -296,8 +303,8 @@ type PipelineStatus struct {
 // The status of the gitops pipelines
 type GitopsStatus struct {
 	Pipelines []PipelineStatus `json:"pipelines,omitempty"`
-	Ready     string `json:"ready,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Ready     string           `json:"ready,omitempty"`
+	Message   string           `json:"message,omitempty"`
 }
 
 func (gs GitopsStatus) GetVersions() []ComponentStatusVersion {

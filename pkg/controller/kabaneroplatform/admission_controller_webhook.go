@@ -4,22 +4,22 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"github.com/go-logr/logr"
-	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
+	"strings"
 
+	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
+	mf "github.com/manifestival/manifestival"
 	admissionregistrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	mf "github.com/manifestival/manifestival"
-	mfc "github.com/manifestival/controller-runtime-client"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
 )
 
-func reconcileAdmissionControllerWebhook(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
+var acwlog = ologger.NewOperatorlogger("controller.kabaneropletform.admission_controller_webhook")
+
+func reconcileAdmissionControllerWebhook(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
 
 	// Figure out what version of the orchestration we are going to use.
 	rev, err := resolveSoftwareRevision(k, "admission-webhook", k.Spec.AdmissionControllerWebhook.Version)
@@ -45,7 +45,7 @@ func reconcileAdmissionControllerWebhook(ctx context.Context, k *kabanerov1alpha
 
 			// Not found.  Make a new one.
 			var ownerRef metav1.OwnerReference
-			ownerRef, err = getOwnerReference(k, c, reqLogger)
+			ownerRef, err = getOwnerReference(k, c)
 			if err != nil {
 				return err
 			}
@@ -55,7 +55,7 @@ func reconcileAdmissionControllerWebhook(ctx context.Context, k *kabanerov1alpha
 			secretInstance.ObjectMeta.Namespace = k.ObjectMeta.Namespace
 			secretInstance.ObjectMeta.OwnerReferences = append(secretInstance.ObjectMeta.OwnerReferences, ownerRef)
 
-			reqLogger.Info("Attempting to create the admission controller webhook secret")
+			acwlog.Info("Attempting to create the admission controller webhook secret")
 			err = c.Create(context.TODO(), secretInstance)
 
 			if err != nil {
@@ -87,7 +87,7 @@ func reconcileAdmissionControllerWebhook(ctx context.Context, k *kabanerov1alpha
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(reqLogger.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), acwlog)
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func reconcileAdmissionControllerWebhook(ctx context.Context, k *kabanerov1alpha
 			Namespace: k.GetNamespace()}, cmInstance)
 		if err != nil {
 			message := "The webhook configuration could not be created"
-			reqLogger.Error(err, message)
+			acwlog.Error(err, message)
 			return fmt.Errorf("%v: %v", message, err.Error())
 		}
 
@@ -129,7 +129,7 @@ func reconcileAdmissionControllerWebhook(ctx context.Context, k *kabanerov1alpha
 		caCert, ok := cmInstance.Data["service-ca.crt"]
 		if !ok || caCert == "" {
 			err = fmt.Errorf("The configmap did not have the service CA injected")
-			reqLogger.Error(err, "Error creating webhook")
+			acwlog.Error(err, "Error creating webhook")
 			return err
 		}
 
@@ -147,7 +147,7 @@ func reconcileAdmissionControllerWebhook(ctx context.Context, k *kabanerov1alpha
 			return err
 		}
 
-		m, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(reqLogger.WithName("manifestival")))
+		m, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), acwlog)
 		if err != nil {
 			return err
 		}
@@ -163,7 +163,7 @@ func reconcileAdmissionControllerWebhook(ctx context.Context, k *kabanerov1alpha
 
 // Removes the admission webhook server, as well as the resources
 // created by controller-runtime that support the webhook.
-func cleanupAdmissionControllerWebhook(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
+func cleanupAdmissionControllerWebhook(k *kabanerov1alpha2.Kabanero, c client.Client) error {
 
 	rev, err := resolveSoftwareRevision(k, "admission-webhook", k.Spec.AdmissionControllerWebhook.Version)
 	if err != nil {
@@ -192,7 +192,7 @@ func cleanupAdmissionControllerWebhook(k *kabanerov1alpha2.Kabanero, c client.Cl
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(reqLogger.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), acwlog)
 	if err != nil {
 		return err
 	}
@@ -221,7 +221,7 @@ func cleanupAdmissionControllerWebhook(k *kabanerov1alpha2.Kabanero, c client.Cl
 			return err
 		}
 
-		m, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(reqLogger.WithName("manifestival")))
+		m, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), acwlog)
 		if err != nil {
 			return err
 		}
@@ -277,7 +277,7 @@ func cleanupAdmissionControllerWebhook(k *kabanerov1alpha2.Kabanero, c client.Cl
 
 // Check to see if the admission controller webhook is set up correctly.
 
-func getAdmissionControllerWebhookStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) (bool, error) {
+func getAdmissionControllerWebhookStatus(k *kabanerov1alpha2.Kabanero, c client.Client) (bool, error) {
 	k.Status.AdmissionControllerWebhook.Ready = "False"
 	k.Status.AdmissionControllerWebhook.Message = ""
 
@@ -285,7 +285,7 @@ func getAdmissionControllerWebhookStatus(k *kabanerov1alpha2.Kabanero, c client.
 	_, err := getDeploymentStatus(c, "kabanero-operator-admission-webhook", k.GetNamespace())
 	if err != nil {
 		message := "The admission webhook deployment was not ready: " + err.Error()
-		reqLogger.Error(err, message)
+		acwlog.Error(err, message)
 		k.Status.AdmissionControllerWebhook.Message = message
 		return false, err
 	}
@@ -298,7 +298,7 @@ func getAdmissionControllerWebhookStatus(k *kabanerov1alpha2.Kabanero, c client.
 
 	if err != nil {
 		message := "The admission webhook deployment was not ready: " + err.Error()
-		reqLogger.Error(err, message)
+		acwlog.Error(err, message)
 		k.Status.AdmissionControllerWebhook.Message = message
 		return false, err
 	}
@@ -311,7 +311,7 @@ func getAdmissionControllerWebhookStatus(k *kabanerov1alpha2.Kabanero, c client.
 
 	if err != nil {
 		message := "The admission webhook deployment was not ready: " + err.Error()
-		reqLogger.Error(err, message)
+		acwlog.Error(err, message)
 		k.Status.AdmissionControllerWebhook.Message = message
 		return false, err
 	}

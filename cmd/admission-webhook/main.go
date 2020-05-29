@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"runtime"
@@ -9,14 +10,16 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"github.com/kabanero-io/kabanero-operator/pkg/apis"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	collectionwebhook "github.com/kabanero-io/kabanero-operator/pkg/webhook/collection"
 	kabanerowebhookv1alpha1 "github.com/kabanero-io/kabanero-operator/pkg/webhook/kabanero/v1alpha1"
 	kabanerowebhookv1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/webhook/kabanero/v1alpha2"
 	stackwebhook "github.com/kabanero-io/kabanero-operator/pkg/webhook/stack"
+	"github.com/spf13/pflag"
 
+	"github.com/operator-framework/operator-sdk/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 )
@@ -61,7 +64,11 @@ func getHookNamespace() (string, error) {
 }
 
 func main() {
-	logf.SetLogger(zap.Logger(false))
+	pflag.CommandLine.AddFlagSet(zap.FlagSet())
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	pflag.Set("zap-time-encoding", "iso8601")
+	pflag.Parse()
+	logf.SetLogger(zap.Logger())
 
 	printVersion()
 
@@ -106,6 +113,14 @@ func main() {
 	hookServer.Register("/validate-stacks", stackwebhook.BuildValidatingWebhook(&mgr))
 	hookServer.Register("/mutate-stacks", stackwebhook.BuildMutatingWebhook(&mgr))
 
+	log.Info("Seting up trace logger.")
+
+	ologger.SetTraceComponents(nil, mgr.GetAPIReader(), namespace, nil)
+	informer, _ := ologger.GetTraceConfigmapInformer(namespace)
+	stopChannel := make(chan struct{})
+	defer close(stopChannel)
+	go informer.Run(stopChannel)
+
 	log.Info("Starting the Cmd.")
 
 	// Start the Cmd
@@ -113,4 +128,5 @@ func main() {
 		log.Error(err, "Manager exited non-zero")
 		os.Exit(1)
 	}
+
 }

@@ -10,10 +10,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
 	kabTransforms "github.com/kabanero-io/kabanero-operator/pkg/controller/transforms"
-	mfc "github.com/manifestival/controller-runtime-client"
+
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	mf "github.com/manifestival/manifestival"
 	routev1 "github.com/openshift/api/route/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,10 +23,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+var clilog = ologger.NewOperatorlogger("controller.kabaneropletform.cli")
+
 // Reconciles the Kabanero CLI service.
-func reconcileKabaneroCli(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger logr.Logger) error {
+func reconcileKabaneroCli(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client) error {
 	// Create the AES encryption key secret, if we don't already have one
-	err := createEncryptionKeySecret(k, cl, reqLogger)
+	err := createEncryptionKeySecret(k, cl)
 	if err != nil {
 		return err
 	}
@@ -57,13 +59,13 @@ func reconcileKabaneroCli(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl 
 		return err
 	}
 
-	m, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(cl)), mf.UseLogger(reqLogger.WithName("manifestival")))
+	m, err := ologger.ManifestFrom(cl, mf.Reader(strings.NewReader(s)), clilog)
 	if err != nil {
 		return err
 	}
 
 	usingPassthroughTLS := strings.HasSuffix(rev.OrchestrationPath, "0.1")
-	transformedManifest, err := processTransformation(k, m, usingPassthroughTLS, reqLogger)
+	transformedManifest, err := processTransformation(k, m, usingPassthroughTLS)
 	if err != nil {
 		return err
 	}
@@ -80,17 +82,17 @@ func reconcileKabaneroCli(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl 
 			return err
 		}
 
-		content, err := renderOrchestration(file, templateContext)
+		s, err := renderOrchestration(file, templateContext)
 		if err != nil {
 			return err
 		}
 
-		manifest, err := mf.ManifestFrom(mf.Reader(strings.NewReader(content)), mf.UseClient(mfc.NewClient(cl)), mf.UseLogger(reqLogger.WithName("manifestival")))
+		manifest, err := ologger.ManifestFrom(cl, mf.Reader(strings.NewReader(s)), clilog)
 		if err != nil {
 			return err
 		}
 
-		transformedManifest, err := processTransformation(k, manifest, true, reqLogger)
+		transformedManifest, err := processTransformation(k, manifest, true)
 		if err != nil {
 			return err
 		}
@@ -102,7 +104,7 @@ func reconcileKabaneroCli(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl 
 	}
 
 	// If there is a role binding config map, delete it (previous version)
-	err = destroyRoleBindingConfigMap(k, cl, reqLogger)
+	err = destroyRoleBindingConfigMap(k, cl)
 	if err != nil {
 		return err
 	}
@@ -110,7 +112,7 @@ func reconcileKabaneroCli(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl 
 	return nil
 }
 
-func processTransformation(k *kabanerov1alpha2.Kabanero, manifest mf.Manifest, processEnv bool, reqLogger logr.Logger) (*mf.Manifest, error) {
+func processTransformation(k *kabanerov1alpha2.Kabanero, manifest mf.Manifest, processEnv bool) (*mf.Manifest, error) {
 	transforms := []mf.Transformer{
 		mf.InjectOwner(k),
 		mf.InjectNamespace(k.GetNamespace()),
@@ -141,7 +143,7 @@ func processTransformation(k *kabanerov1alpha2.Kabanero, manifest mf.Manifest, p
 			apiUrl, err := url.Parse(apiUrlString)
 
 			if err != nil {
-				reqLogger.Error(err, "Could not parse Github API url %v, assuming api.github.com", apiUrlString)
+				clilog.Error(err, "Could not parse Github API url %v, assuming api.github.com", apiUrlString)
 				apiUrl, _ = url.Parse("https://api.github.com")
 			} else if len(apiUrl.Scheme) == 0 {
 				apiUrl.Scheme = "https"
@@ -158,7 +160,7 @@ func processTransformation(k *kabanerov1alpha2.Kabanero, manifest mf.Manifest, p
 				return nil, err
 			}
 			if !matched {
-				reqLogger.Info(fmt.Sprintf("Kabanero Spec.CliServices.SessionExpirationSeconds must specify a positive integer followed by a unit of time, which can be hours (h), minutes (m), or seconds (s). Defaulting to 1440m."))
+				clilog.Info(fmt.Sprintf("Kabanero Spec.CliServices.SessionExpirationSeconds must specify a positive integer followed by a unit of time, which can be hours (h), minutes (m), or seconds (s). Defaulting to 1440m."))
 				transforms = append(transforms, kabTransforms.AddEnvVariable("JwtExpiration", "1440m"))
 			} else {
 				transforms = append(transforms, kabTransforms.AddEnvVariable("JwtExpiration", k.Spec.CliServices.SessionExpirationSeconds))
@@ -177,7 +179,7 @@ func processTransformation(k *kabanerov1alpha2.Kabanero, manifest mf.Manifest, p
 }
 
 // Tries to see if the CLI route has been assigned a hostname.
-func getCliRouteStatus(k *kabanerov1alpha2.Kabanero, reqLogger logr.Logger, c client.Client) (bool, error) {
+func getCliRouteStatus(k *kabanerov1alpha2.Kabanero, c client.Client) (bool, error) {
 
 	// Check that the route is accepted
 	cliRoute := &routev1.Route{}
@@ -213,7 +215,7 @@ func getCliRouteStatus(k *kabanerov1alpha2.Kabanero, reqLogger logr.Logger, c cl
 		} else {
 			message = "An error occurred retrieving the Route object for the CLI"
 		}
-		reqLogger.Error(err, message)
+		clilog.Error(err, message)
 		k.Status.Cli.Ready = "False"
 		k.Status.Cli.Message = message + ": " + err.Error()
 		k.Status.Cli.Hostnames = nil
@@ -224,7 +226,7 @@ func getCliRouteStatus(k *kabanerov1alpha2.Kabanero, reqLogger logr.Logger, c cl
 }
 
 // Deletes the role binding config map which may have existed in a prior version
-func destroyRoleBindingConfigMap(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
+func destroyRoleBindingConfigMap(k *kabanerov1alpha2.Kabanero, c client.Client) error {
 
 	// Check if the ConfigMap resource already exists.
 	cmInstance := &corev1.ConfigMap{}
@@ -242,14 +244,14 @@ func destroyRoleBindingConfigMap(k *kabanerov1alpha2.Kabanero, c client.Client, 
 	}
 
 	// Need to delete it.
-	reqLogger.Info(fmt.Sprintf("Attempting to delete CLI role binding config map: %v", cmInstance))
+	clilog.Info(fmt.Sprintf("Attempting to delete CLI role binding config map: %v", cmInstance))
 	err = c.Delete(context.TODO(), cmInstance)
 
 	return err
 }
 
 // Creates the secret containing the AES encryption key used by the CLI.
-func createEncryptionKeySecret(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
+func createEncryptionKeySecret(k *kabanerov1alpha2.Kabanero, c client.Client) error {
 	secretName := "kabanero-cli-aes-encryption-key-secret"
 
 	// Check if the Secret already exists.
@@ -265,7 +267,7 @@ func createEncryptionKeySecret(k *kabanerov1alpha2.Kabanero, c client.Client, re
 
 		// Not found.  Make a new one.
 		var ownerRef metav1.OwnerReference
-		ownerRef, err = getOwnerReference(k, c, reqLogger)
+		ownerRef, err = getOwnerReference(k, c)
 		if err != nil {
 			return err
 		}
@@ -292,7 +294,7 @@ func createEncryptionKeySecret(k *kabanerov1alpha2.Kabanero, c client.Client, re
 		secretMap["AESEncryptionKey"] = buf.String()
 		secretInstance.StringData = secretMap
 
-		reqLogger.Info(fmt.Sprintf("Attempting to create the CLI AES Encryption key secret"))
+		clilog.Info(fmt.Sprintf("Attempting to create the CLI AES Encryption key secret"))
 		err = c.Create(context.TODO(), secretInstance)
 	}
 

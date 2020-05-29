@@ -5,7 +5,6 @@
 #   DOCKER_TAG would be the tag you want to use in the repository
 ARCH ?= amd64
 
-
 ### TRAVIS_TAG build
 ifdef TRAVIS_TAG
 IMAGE = kabanero/kabanero-operator:$(TRAVIS_TAG)

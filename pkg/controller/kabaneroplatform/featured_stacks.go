@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/kabaneroplatform/utils"
 	cutils "github.com/kabanero-io/kabanero-operator/pkg/controller/kabaneroplatform/utils"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/stack"
 	sutils "github.com/kabanero-io/kabanero-operator/pkg/controller/stack/utils"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -16,7 +16,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func reconcileFeaturedStacks(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger logr.Logger) error {
+var fslog = ologger.NewOperatorlogger("controller.kabaneroplatform.featured_stacks")
+
+func reconcileFeaturedStacks(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client) error {
 	// Before we attempt to read the stacks, validate that the stack policy, if defined, is supported.
 	valid, reason, err := cutils.ValidateGovernanceStackPolicy(k)
 	if !valid {
@@ -24,7 +26,7 @@ func reconcileFeaturedStacks(ctx context.Context, k *kabanerov1alpha2.Kabanero, 
 	}
 
 	// Resolve the stacks which are currently featured across the various indexes.
-	stackMap, err := featuredStacks(k, cl, reqLogger)
+	stackMap, err := featuredStacks(k, cl)
 	if err != nil {
 		return err
 	}
@@ -117,7 +119,7 @@ func reconcileFeaturedStacks(ctx context.Context, k *kabanerov1alpha2.Kabanero, 
 }
 
 // Resolves all stacks for the given Kabanero instance
-func featuredStacks(k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger logr.Logger) (map[string][]kabanerov1alpha2.StackVersion, error) {
+func featuredStacks(k *kabanerov1alpha2.Kabanero, cl client.Client) (map[string][]kabanerov1alpha2.StackVersion, error) {
 	stackMap := make(map[string][]kabanerov1alpha2.StackVersion)
 	for _, r := range k.Spec.Stacks.Repositories {
 		// Figure out what set of pipelines to use.  The Kabanero instance defines a default
@@ -132,7 +134,7 @@ func featuredStacks(k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger lo
 			indexPipelines = append(indexPipelines, stack.Pipelines{Id: pipeline.Id, Sha256: pipeline.Sha256, Url: pipeline.Https.Url, GitRelease: pipeline.GitRelease, SkipCertVerification: pipeline.Https.SkipCertVerification})
 		}
 
-		index, err := stack.ResolveIndex(cl, r, k.Namespace, indexPipelines, []stack.Trigger{}, "", reqLogger)
+		index, err := stack.ResolveIndex(cl, r, k.Namespace, indexPipelines, []stack.Trigger{}, "")
 		if err != nil {
 			return nil, err
 		}

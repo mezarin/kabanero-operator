@@ -20,11 +20,13 @@ require (
 	github.com/openshift/api v3.9.1-0.20190924102528-32369d4db2ad+incompatible
 	github.com/operator-framework/operator-lifecycle-manager v3.11.0+incompatible
 	github.com/operator-framework/operator-sdk v0.16.0
+	github.com/prometheus/common v0.7.0
 	github.com/shurcooL/httpfs v0.0.0-20190707220628-8d4bc4ba7749 // indirect
 	github.com/shurcooL/vfsgen v0.0.0-20181202132449-6a9ea43bcacd // indirect
 	github.com/spf13/pflag v1.0.5
 	github.com/tektoncd/operator v0.0.0-20191017104520-be5a46fc149a
 	github.com/tektoncd/pipeline v0.10.1
+	go.uber.org/zap v1.10.0
 	golang.org/x/oauth2 v0.0.0-20190604053449-0f29369cfe45
 	gopkg.in/yaml.v2 v2.2.5
 	k8s.io/api v0.17.0

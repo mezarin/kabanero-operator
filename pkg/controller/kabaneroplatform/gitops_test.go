@@ -38,8 +38,6 @@ func init() {
 	logf.SetLogger(testLogger{})
 }
 
-var klog = logf.Log.WithName("gitops_test")
-
 // Unit test Kube client
 type gitopsTestClient struct {
 	// Objects that the client knows about.
@@ -168,16 +166,16 @@ func TestReconcileGitopsPipelines(t *testing.T) {
 		Spec: kabanerov1alpha2.KabaneroSpec{
 			Gitops: kabanerov1alpha2.GitopsSpec{
 				Pipelines: []kabanerov1alpha2.PipelineSpec{{
-					Id: "default",
+					Id:     "default",
 					Sha256: digest1Pipeline.sha256,
-					Https: kabanerov1alpha2.HttpsProtocolFile{Url: pipelineZipUrl, SkipCertVerification: true},
+					Https:  kabanerov1alpha2.HttpsProtocolFile{Url: pipelineZipUrl, SkipCertVerification: true},
 				}},
 			},
 		},
 	}
 
 	client := gitopsTestClient{map[client.ObjectKey]bool{}}
-	err := reconcileGitopsPipelines(context.TODO(), &kabaneroResource, client, klog)
+	err := reconcileGitopsPipelines(context.TODO(), &kabaneroResource, client)
 
 	if err != nil {
 		t.Fatal("Returned error: " + err.Error())
@@ -229,22 +227,22 @@ func TestCleanupGitopsPipelines(t *testing.T) {
 		Spec: kabanerov1alpha2.KabaneroSpec{
 			Gitops: kabanerov1alpha2.GitopsSpec{
 				Pipelines: []kabanerov1alpha2.PipelineSpec{{
-					Id: "default",
+					Id:     "default",
 					Sha256: digest1Pipeline.sha256,
-					Https: kabanerov1alpha2.HttpsProtocolFile{Url: "bogus"},
+					Https:  kabanerov1alpha2.HttpsProtocolFile{Url: "bogus"},
 				}},
 			},
 		},
 		Status: kabanerov1alpha2.KabaneroStatus{
 			Gitops: kabanerov1alpha2.GitopsStatus{
 				Pipelines: []kabanerov1alpha2.PipelineStatus{{
-					Name: "default",
+					Name:   "default",
 					Digest: digest1Pipeline.sha256,
 					ActiveAssets: []kabanerov1alpha2.RepositoryAssetStatus{{
-						Name: "my-pipeline",
+						Name:      "my-pipeline",
 						Namespace: "kabanero",
 					}, {
-						Name: "my-task",
+						Name:      "my-task",
 						Namespace: "kabanero",
 					}},
 				}},
@@ -256,8 +254,8 @@ func TestCleanupGitopsPipelines(t *testing.T) {
 	clientMap[client.ObjectKey{Name: "my-pipeline", Namespace: "kabanero"}] = true
 	clientMap[client.ObjectKey{Name: "my-task", Namespace: "kabanero"}] = true
 	client := gitopsTestClient{clientMap}
-	
-	err := cleanupGitopsPipelines(context.TODO(), &kabaneroResource, client, klog)
+
+	err := cleanupGitopsPipelines(context.TODO(), &kabaneroResource, client)
 
 	if err != nil {
 		t.Fatal("Returned error: " + err.Error())
@@ -268,4 +266,3 @@ func TestCleanupGitopsPipelines(t *testing.T) {
 		t.Fatal(fmt.Sprintf("Client map should have 0 entries, but has %v: %v", len(client.objs), client.objs))
 	}
 }
-

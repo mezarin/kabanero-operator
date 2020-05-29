@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"testing"
 	"net/http"
 	"net/http/httptest"
+	"testing"
 
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
 	"k8s.io/apimachinery/pkg/runtime"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -71,13 +70,12 @@ func TestGetManifests(t *testing.T) {
 	server := httptest.NewServer(stackHandler{})
 	defer server.Close()
 
-	reqLogger := logf.NullLogger{}
 	pipelineStatus := kabanerov1alpha2.PipelineStatus{
 		Url:        server.URL + basicPipeline.name,
 		Digest:     basicPipeline.sha256,
 		GitRelease: kabanerov1alpha2.GitReleaseInfo{}}
 
-	manifests, err := GetManifests(archiveTestClient{}, "kabanero", pipelineStatus, map[string]interface{}{"StackName": "Eclipse Microprofile", "StackId": "java-microprofile"}, true, reqLogger)
+	manifests, err := GetManifests(archiveTestClient{}, "kabanero", pipelineStatus, map[string]interface{}{"StackName": "Eclipse Microprofile", "StackId": "java-microprofile"}, true)
 
 	if err != nil {
 		t.Fatal(err)
@@ -93,13 +91,12 @@ func TestGetManifestsQuery(t *testing.T) {
 	server := httptest.NewServer(stackHandler{})
 	defer server.Close()
 
-	reqLogger := logf.NullLogger{}
 	pipelineStatus := kabanerov1alpha2.PipelineStatus{
 		Url:        server.URL + basicPipeline.name,
 		Digest:     basicPipeline.sha256,
 		GitRelease: kabanerov1alpha2.GitReleaseInfo{}}
 
-	manifests, err := GetManifests(archiveTestClient{}, "kabanero", pipelineStatus, map[string]interface{}{"StackName": "Eclipse Microprofile", "StackId": "java-microprofile"}, true, reqLogger)
+	manifests, err := GetManifests(archiveTestClient{}, "kabanero", pipelineStatus, map[string]interface{}{"StackName": "Eclipse Microprofile", "StackId": "java-microprofile"}, true)
 
 	if err != nil {
 		t.Fatal(err)
@@ -115,13 +112,12 @@ func TestGetManifestsYaml(t *testing.T) {
 	server := httptest.NewServer(stackHandler{})
 	defer server.Close()
 
-	reqLogger := logf.NullLogger{}
 	pipelineStatus := kabanerov1alpha2.PipelineStatus{
-		Url: server.URL + "/good-pipeline.yaml",
-		Digest: "3b34de594df82cac3cb67c556a416443f6fafc0bc79101613eaa7ae0d59dd462",
+		Url:        server.URL + "/good-pipeline.yaml",
+		Digest:     "3b34de594df82cac3cb67c556a416443f6fafc0bc79101613eaa7ae0d59dd462",
 		GitRelease: kabanerov1alpha2.GitReleaseInfo{}}
-	
-	manifests, err := GetManifests(archiveTestClient{}, "kabanero", pipelineStatus, map[string]interface{}{"StackName": "Eclipse Microprofile", "StackId": "java-microprofile"}, true, reqLogger)
+
+	manifests, err := GetManifests(archiveTestClient{}, "kabanero", pipelineStatus, map[string]interface{}{"StackName": "Eclipse Microprofile", "StackId": "java-microprofile"}, true)
 
 	if err != nil {
 		t.Fatal(err)

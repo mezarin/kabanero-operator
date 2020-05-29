@@ -691,6 +691,12 @@ spec:
                 items:
                   type: string
                 type: array
+              trace:
+                description: TraceSpec defines logging customization entries.
+                properties:
+                  spec:
+                    type: string
+                type: object
               triggers:
                 items:
                   description: TriggerSpec defines the sets of default triggers for

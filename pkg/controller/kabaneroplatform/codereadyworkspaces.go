@@ -6,12 +6,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
 	kutils "github.com/kabanero-io/kabanero-operator/pkg/controller/kabaneroplatform/utils"
+
+	//cutils "github.com/kabanero-io/kabanero-operator/pkg/controller/utils"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/utils/timer"
 	"github.com/kabanero-io/kabanero-operator/pkg/versioning"
-	mfc "github.com/manifestival/controller-runtime-client"
 	mf "github.com/manifestival/manifestival"
 	apiextv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -24,12 +25,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	rlog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
-var crwlog = rlog.Log.WithName("kabanero-codeready-workspaces")
+var crwlog = ologger.NewOperatorlogger("controller.kabaneroplatform.codereadyworkspaces")
 
 const (
 	crwOrchestrationFilePath         = "orchestrations/codeready-workspaces/0.1"
@@ -52,9 +52,8 @@ func initializeCRW(k *kabanerov1alpha2.Kabanero) {
 	}
 }
 
-func reconcileCRW(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
-	logger := crwlog.WithValues("Kabanero instance namespace", k.Namespace, "Kabanero instance Name", k.Name)
-	logger.Info("Reconciling codeready-workspaces install.")
+func reconcileCRW(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
+	crwlog.Info(fmt.Sprintf("Reconciling codeready-workspaces install. Namepsace: %v. Operator instance name: %v", k.Namespace, k.Name))
 
 	rev, err := resolveSoftwareRevision(k, "codeready-workspaces", k.Spec.CodereadyWorkspaces.Operator.CustomResourceInstance.DevFileRegistryImage.Version)
 	if err != nil {
@@ -72,36 +71,36 @@ func reconcileCRW(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Cl
 	// Deploy the Codewind cluster role with the required permissions for codewind.
 	err = processCRWYaml(ctx, k, rev, templateCtx, c, crwYamlNameCodewindClusterRole, true, k.GetNamespace())
 	if err != nil {
-		logger.Error(err, fmt.Sprintf("Failed to Apply clusterRole resource. Revision: %v. TemplateCtx: %v", rev, templateCtx))
+		crwlog.Error(err, fmt.Sprintf("Failed to Apply clusterRole resource. Revision: %v. TemplateCtx: %v", rev, templateCtx))
 		return err
 	}
 
 	// Deploy the Codewind Tekton role
 	err = processCRWYaml(ctx, k, rev, templateCtx, c, crwYamlNameCodewindTektonRole, true, "tekton-pipelines")
 	if err != nil {
-		logger.Error(err, fmt.Sprintf("Failed to Apply role resource. Revision: %v. TemplateCtx: %v", rev, templateCtx))
+		crwlog.Error(err, fmt.Sprintf("Failed to Apply role resource. Revision: %v. TemplateCtx: %v", rev, templateCtx))
 		return err
 	}
 
 	// Deploy the Codewind Tekton rolebinding
 	err = processCRWYaml(ctx, k, rev, templateCtx, c, crwYamlNameCodewindTektonBinding, true, "tekton-pipelines")
 	if err != nil {
-		logger.Error(err, fmt.Sprintf("Failed to Apply rolebinding resource. Revision: %v. TemplateCtx: %v", rev, templateCtx))
+		crwlog.Error(err, fmt.Sprintf("Failed to Apply rolebinding resource. Revision: %v. TemplateCtx: %v", rev, templateCtx))
 		return err
 	}
 
 	// Be sure the codeready-workspaces CRD is active before we deploy an instance.
 	crdActive, err := isCRWCRDActive()
 	if err != nil {
-		logger.Error(err, "Failed to verify if the codeready-workspaces CRD is active.")
+		crwlog.Error(err, "Failed to verify if the codeready-workspaces CRD is active.")
 		return err
 	}
 
 	// Apply the codeready-workspaces CR instance if it does not already exists.
 	if crdActive {
-		err = deployCRWInstance(ctx, k, c, rev, logger)
+		err = deployCRWInstance(ctx, k, c, rev)
 		if err != nil {
-			logger.Error(err, fmt.Sprintf("Failed to create or validate codeready-workspaces instance. Controller: %v.", ctrlr))
+			crwlog.Error(err, fmt.Sprintf("Failed to create or validate codeready-workspaces instance. Controller: %v.", ctrlr))
 			return err
 		}
 	}
@@ -111,7 +110,7 @@ func reconcileCRW(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Cl
 
 // Deploys the codeready-workspaces operator CR if one does not exist. If the codeready-workspaces operator CR exists,
 // it validates that the image and tag values are consistent with what was configured.
-func deployCRWInstance(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, rev versioning.SoftwareRevision, logger logr.Logger) error {
+func deployCRWInstance(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, rev versioning.SoftwareRevision) error {
 	deployed, err := isCRWInstanceDeployed(ctx, k, c)
 	if err != nil {
 		return err
@@ -308,7 +307,7 @@ func processCRWYaml(ctx context.Context, k *kabanerov1alpha2.Kabanero, rev versi
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(rlog.Log.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), crwlog)
 	if err != nil {
 		return err
 	}

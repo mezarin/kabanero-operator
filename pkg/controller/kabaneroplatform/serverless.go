@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	knsv1alpha1 "github.com/knative/serving-operator/pkg/apis/serving/v1alpha1"
 	olmapiv1alpha1 "github.com/operator-framework/operator-lifecycle-manager/pkg/api/apis/operators/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,6 +15,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var sllog = ologger.NewOperatorlogger("controller.kabaneropletform.serverless")
 
 // Constants
 const (
@@ -24,31 +26,31 @@ const (
 
 // Returns the OpenShift serverless status. The status is based on the availability of the components
 // that make up OpenShift serverless.
-func getServerlessStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) (bool, error) {
+func getServerlessStatus(k *kabanerov1alpha2.Kabanero, c client.Client) (bool, error) {
 	// Find the installed CSV name.
-	installedCSVName, err := getInstalledCSVName(k, c, reqLogger)
+	installedCSVName, err := getInstalledCSVName(k, c)
 	if err != nil {
 		message := "Unable to retrieve the name of the installed CSV from the serverless subscription"
 		k.Status.Serverless.Ready = "False"
 		k.Status.Serverless.Message = message + ". Error: " + err.Error()
-		reqLogger.Error(err, message)
+		sllog.Error(err, message)
 		return false, err
 	}
 
 	// Find and set the serverless version.
-	csvVersion, err := getServerlessCSVVersion(k, c, installedCSVName, reqLogger)
+	csvVersion, err := getServerlessCSVVersion(k, c, installedCSVName)
 	if err != nil {
 		message := "Unable to retrieve the version of installed serverless CSV with the name of " + installedCSVName
 		k.Status.Serverless.Ready = "False"
 		k.Status.Serverless.Message = message + ". Error: " + err.Error()
-		reqLogger.Error(err, message)
+		sllog.Error(err, message)
 		return false, err
 	}
 	k.Status.Serverless.Version = csvVersion
 
 	// Set the status. The serverless status is based on the status of the components that are part of
 	// the serverless operator.
-	ready, _ := getKnativeServingStatus(k, c, reqLogger)
+	ready, _ := getKnativeServingStatus(k, c)
 
 	if !ready {
 		k.Status.Serverless.Ready = "False"
@@ -62,7 +64,7 @@ func getServerlessStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogge
 }
 
 // Returns the name of the installed serverless CSV.
-func getInstalledCSVName(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) (string, error) {
+func getInstalledCSVName(k *kabanerov1alpha2.Kabanero, c client.Client) (string, error) {
 	sList := &unstructured.UnstructuredList{}
 	sList.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   olmapiv1alpha1.GroupName,
@@ -103,7 +105,7 @@ func getInstalledCSVName(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogge
 }
 
 // Returns the version of the serverless CSV associated with the input CSV name.
-func getServerlessCSVVersion(k *kabanerov1alpha2.Kabanero, c client.Client, csvName string, reqLogger logr.Logger) (string, error) {
+func getServerlessCSVVersion(k *kabanerov1alpha2.Kabanero, c client.Client, csvName string) (string, error) {
 	csvInstance := &unstructured.Unstructured{}
 	csvInstance.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   olmapiv1alpha1.GroupName,
@@ -132,7 +134,7 @@ func getServerlessCSVVersion(k *kabanerov1alpha2.Kabanero, c client.Client, csvN
 }
 
 // Retrieves the knative serving instance status.
-func getKnativeServingStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) (bool, error) {
+func getKnativeServingStatus(k *kabanerov1alpha2.Kabanero, c client.Client) (bool, error) {
 	k.Status.Serverless.KnativeServing.Message = ""
 	k.Status.Serverless.KnativeServing.Ready = "False"
 
@@ -159,14 +161,14 @@ func getKnativeServingStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqL
 			k.Status.Serverless.KnativeServing.Message = "Error retrieving KnativeServing instance: " + err.Error()
 		}
 
-		reqLogger.Error(err, k.Status.Serverless.KnativeServing.Message)
+		sllog.Error(err, k.Status.Serverless.KnativeServing.Message)
 		return false, err
 	}
 
 	data, err := knsInstance.MarshalJSON()
 	if err != nil {
 		k.Status.Serverless.KnativeServing.Message = err.Error()
-		reqLogger.Error(err, "Error marshalling unstructured KnativeServing data")
+		sllog.Error(err, "Error marshalling unstructured KnativeServing data")
 		return false, err
 	}
 
@@ -174,7 +176,7 @@ func getKnativeServingStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqL
 	err = json.Unmarshal(data, kns)
 	if err != nil {
 		k.Status.Serverless.KnativeServing.Message = err.Error()
-		reqLogger.Error(err, "Error unmarshalling unstructured KnativeServing data")
+		sllog.Error(err, "Error unmarshalling unstructured KnativeServing data")
 		return false, err
 	}
 

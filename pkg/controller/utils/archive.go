@@ -13,14 +13,16 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/utils/cache"
 	yml "gopkg.in/yaml.v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var ualog = ologger.NewOperatorlogger("controller.utils.archive")
 
 // Stack archive manifest.yaml
 type StackManifest struct {
@@ -42,12 +44,12 @@ type StackAsset struct {
 	Yaml    unstructured.Unstructured
 }
 
-func DownloadToByte(c client.Client, namespace string, url string, gitRelease kabanerov1alpha2.GitReleaseInfo, skipCertVerification bool, reqLogger logr.Logger) ([]byte, error) {
+func DownloadToByte(c client.Client, namespace string, url string, gitRelease kabanerov1alpha2.GitReleaseInfo, skipCertVerification bool) ([]byte, error) {
 	var archiveBytes []byte
 	switch {
 	// GIT:
 	case gitRelease.IsUsable():
-		bytes, err := cache.GetStackDataUsingGit(c, gitRelease, skipCertVerification, namespace, reqLogger)
+		bytes, err := cache.GetStackDataUsingGit(c, gitRelease, skipCertVerification, namespace)
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +136,7 @@ func readBytesFromReader(size int64, r io.Reader) ([]byte, error) {
 //Read the manifests from a tar.gz archive
 //It would be better to use the manifest.yaml as the index, and check the signatures
 //For now, ignore manifest.yaml and return all other yaml files from the archive
-func decodeManifests(archive []byte, renderingContext map[string]interface{}, reqLogger logr.Logger) ([]StackAsset, error) {
+func decodeManifests(archive []byte, renderingContext map[string]interface{}) ([]StackAsset, error) {
 	manifests := []StackAsset{}
 	var stackmanifest StackManifest
 
@@ -176,7 +178,7 @@ func decodeManifests(archive []byte, renderingContext map[string]interface{}, re
 		}
 	}
 
-	reqLogger.Info(fmt.Sprintf("Header names: %v", strings.Join(headers, ",")))
+	ualog.Info(fmt.Sprintf("Header names: %v", strings.Join(headers, ",")))
 
 	if foundManifest != true {
 		return nil, fmt.Errorf("Error reading archive, unable to read manifest.yaml")
@@ -235,7 +237,7 @@ func decodeManifests(archive []byte, renderingContext map[string]interface{}, re
 						// Would be nice if we could make this a warning message, but it seems like the only
 						// options are error and info.  It's possible that some implementation has other methods
 						// but someone needs to investigate.
-						reqLogger.Info(fmt.Sprintf("Archive file %v was listed in the manifest but had no checksum.  Checksum validation for this file is skipped.", header.Name))
+						ualog.Info(fmt.Sprintf("Archive file %v was listed in the manifest but had no checksum.  Checksum validation for this file is skipped.", header.Name))
 						match = true
 					}
 				}
@@ -299,8 +301,8 @@ func getPipelineFileType(pipelineStatus kabanerov1alpha2.PipelineStatus) (fileTy
 	}
 }
 
-func GetManifests(c client.Client, namespace string, pipelineStatus kabanerov1alpha2.PipelineStatus, renderingContext map[string]interface{}, skipCertVerification bool, reqLogger logr.Logger) ([]StackAsset, error) {
-	b, err := DownloadToByte(c, namespace, pipelineStatus.Url, pipelineStatus.GitRelease,skipCertVerification, reqLogger)
+func GetManifests(c client.Client, namespace string, pipelineStatus kabanerov1alpha2.PipelineStatus, renderingContext map[string]interface{}, skipCertVerification bool) ([]StackAsset, error) {
+	b, err := DownloadToByte(c, namespace, pipelineStatus.Url, pipelineStatus.GitRelease, skipCertVerification)
 	if err != nil {
 		return nil, err
 	}
@@ -321,14 +323,14 @@ func GetManifests(c client.Client, namespace string, pipelineStatus kabanerov1al
 		if b_sum != c_sum {
 			return nil, fmt.Errorf("Index checksum: %x not match download checksum: %x for Pipeline Name %v", c_sum, b_sum, pipelineStatus.Name)
 		}
-		manifests, err := decodeManifests(b, renderingContext, reqLogger)
+		manifests, err := decodeManifests(b, renderingContext)
 		if err != nil {
 			return nil, err
 		}
 		return manifests, nil
 	} else if fileType == yamlType {
 		if b_sum != c_sum {
-			reqLogger.Info(fmt.Sprintf("Index checksum: %x not match download checksum: %x for Pipeline Name %v", c_sum, b_sum, pipelineStatus.Name))
+			ualog.Info(fmt.Sprintf("Index checksum: %x not match download checksum: %x for Pipeline Name %v", c_sum, b_sum, pipelineStatus.Name))
 		}
 		manifests, err := processManifest(b, renderingContext, pipelineStatus.Name, hex.EncodeToString(b_sum[:]))
 		if (err != nil) && (err != io.EOF) {

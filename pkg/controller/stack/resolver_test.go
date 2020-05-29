@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,8 +38,6 @@ func (c resolverTestClient) Patch(ctx context.Context, obj runtime.Object, patch
 	return errors.New("Patch is not implemented")
 }
 
-var resolverTestLogger logr.Logger = log.WithValues("Request.Namespace", "test", "Request.Name", "resolver_test")
-
 func TestResolveIndex(t *testing.T) {
 	// The server that will host the stack hub index
 	server := httptest.NewServer(stackHandler{})
@@ -54,7 +51,7 @@ func TestResolveIndex(t *testing.T) {
 		},
 	}
 
-	index, err := ResolveIndex(resolverTestClient{}, repoConfig, "kabanero", []Pipelines{}, []Trigger{}, "", resolverTestLogger)
+	index, err := ResolveIndex(resolverTestClient{}, repoConfig, "kabanero", []Pipelines{}, []Trigger{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +77,7 @@ func TestResolveIndexForStacks(t *testing.T) {
 
 	pipelines := []Pipelines{{Id: "testPipeline", Sha256: "513090b303ba8711c93ab1e2eacc66769086e0e18fe11a10140aaf6a70c8be78", Url: server.URL + "/0.5.0-rc.2/incubator.common.pipeline.default.tar.gz"}}
 	triggers := []Trigger{{Id: "testTrigger", Sha256: "9b11091f295fb6706a8dbca62f57adf26b55d6f35eb0d5b0988129db91d295c0", Url: server.URL + "/0.5.0-rc.2/incubator.trigger.tar.gz"}}
-	index, err := ResolveIndex(resolverTestClient{}, repoConfig, "kabanero", pipelines, triggers, "kabanerobeta", resolverTestLogger)
+	index, err := ResolveIndex(resolverTestClient{}, repoConfig, "kabanero", pipelines, triggers, "kabanerobeta")
 
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +145,7 @@ func TestResolveIndexForStacksInPublicGitFailure1(t *testing.T) {
 
 	pipelines := []Pipelines{{Id: "testPipeline", Sha256: "513090b303ba8711c93ab1e2eacc66769086e0e18fe11a10140aaf6a70c8be78", Url: server.URL + "/0.5.0-rc.2/incubator.common.pipeline.default.tar.gz"}}
 	triggers := []Trigger{{Id: "testTrigger", Sha256: "9b11091f295fb6706a8dbca62f57adf26b55d6f35eb0d5b0988129db91d295c0", Url: server.URL + "/0.5.0-rc.2/incubator.trigger.tar.gz"}}
-	index, err := ResolveIndex(resolverTestClient{}, repoConfig, "kabanero", pipelines, triggers, "kabanerobeta", resolverTestLogger)
+	index, err := ResolveIndex(resolverTestClient{}, repoConfig, "kabanero", pipelines, triggers, "kabanerobeta")
 
 	if err == nil {
 		t.Fatal("No Git release or Http url were specified. An error was expected. Index: ", index)

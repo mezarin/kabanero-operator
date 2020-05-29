@@ -7,11 +7,11 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/kabaneroplatform/utils"
 	kabTransforms "github.com/kabanero-io/kabanero-operator/pkg/controller/transforms"
-	mfc "github.com/manifestival/controller-runtime-client"
+
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	mf "github.com/manifestival/manifestival"
 	consolev1 "github.com/openshift/api/console/v1"
 	routev1 "github.com/openshift/api/route/v1"
@@ -22,13 +22,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	rlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-var kllog = rlog.Log.WithName("kabanero-landing")
+var llog = ologger.NewOperatorlogger("controller.kabaneropletform.landing")
 
 // Deploys resources and customizes to the Openshift web console.
-func deployLandingPage(_ context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, logger logr.Logger) error {
+func deployLandingPage(_ context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
 	// If enable is false do not deploy the landing page.
 	if k.Spec.Landing.Enable != nil && *(k.Spec.Landing.Enable) == false {
 		err := cleanupLandingPage(k, c)
@@ -62,7 +61,7 @@ func deployLandingPage(_ context.Context, k *kabanerov1alpha2.Kabanero, c client
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), llog)
 	if err != nil {
 		return err
 	}
@@ -96,7 +95,7 @@ func deployLandingPage(_ context.Context, k *kabanerov1alpha2.Kabanero, c client
 		return err
 	}
 
-	mOrig, err = mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	mOrig, err = ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), llog)
 	if err != nil {
 		return err
 	}
@@ -127,7 +126,7 @@ func deployLandingPage(_ context.Context, k *kabanerov1alpha2.Kabanero, c client
 
 		apiUrl, err := url.Parse(apiUrlString)
 		if err != nil {
-			kllog.Error(err, "Could not parse Github API url %v, assuming api.github.com", apiUrlString)
+			llog.Error(err, "Could not parse Github API url %v, assuming api.github.com", apiUrlString)
 			apiUrl, _ = url.Parse("https://api.github.com")
 		} else if len(apiUrl.Scheme) == 0 {
 			apiUrl.Scheme = "https"
@@ -210,7 +209,7 @@ func cleanupLandingPage(k *kabanerov1alpha2.Kabanero, c client.Client) error {
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(rlog.Log.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), llog)
 	if err != nil {
 		return err
 	}
@@ -260,7 +259,7 @@ func getLandingURL(k *kabanerov1alpha2.Kabanero, c client.Client) (string, error
 		landingURL = "https://" + landingURL
 	}
 
-	kllog.Info(fmt.Sprintf("getLandingURL: URL: %v", landingURL))
+	llog.Info(fmt.Sprintf("getLandingURL: URL: %v", landingURL))
 
 	return landingURL, err
 }
@@ -296,7 +295,7 @@ func customizeWebConsole(k *kabanerov1alpha2.Kabanero, c client.Client, landingU
 		consoleLink.Spec.ApplicationMenu.Section = "Kabanero"
 		clientOp = utils.Create
 
-		kllog.Info("Creating ConsoleLink kabanero-app-menu-link")
+		llog.Info("Creating ConsoleLink kabanero-app-menu-link")
 	}
 
 	// Stuff that could change (dependent on the landingURL)
@@ -321,7 +320,7 @@ func customizeWebConsole(k *kabanerov1alpha2.Kabanero, c client.Client, landingU
 		consoleLink.Spec.Text = "Kabanero Docs"
 		clientOp = utils.Create
 
-		kllog.Info("Creating ConsoleLink kabanero-help-menu-docs")
+		llog.Info("Creating ConsoleLink kabanero-help-menu-docs")
 	}
 
 	// Stuff that could change (dependent on the landing URL)
@@ -363,7 +362,7 @@ func removeWebConsoleCustomization(k *kabanerov1alpha2.Kabanero, c client.Client
 	if err == nil {
 		err = c.Delete(context.TODO(), consoleLink)
 		if err != nil {
-			kllog.Error(err, "Unable to delete ConsoleLink")
+			llog.Error(err, "Unable to delete ConsoleLink")
 		}
 	}
 
@@ -371,7 +370,7 @@ func removeWebConsoleCustomization(k *kabanerov1alpha2.Kabanero, c client.Client
 	if err == nil {
 		err = c.Delete(context.TODO(), consoleLink)
 		if err != nil {
-			kllog.Error(err, "Unable to delete ConsoleLink")
+			llog.Error(err, "Unable to delete ConsoleLink")
 		}
 	}
 
@@ -379,7 +378,7 @@ func removeWebConsoleCustomization(k *kabanerov1alpha2.Kabanero, c client.Client
 	if err == nil {
 		err = c.Delete(context.TODO(), consoleLink)
 		if err != nil {
-			kllog.Error(err, "Unable to delete ConsoleLink")
+			llog.Error(err, "Unable to delete ConsoleLink")
 		}
 	}
 

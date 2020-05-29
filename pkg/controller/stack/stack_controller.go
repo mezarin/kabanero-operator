@@ -13,17 +13,19 @@ import (
 	"github.com/docker/cli/cli/config"
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/cli/config/types"
-	"github.com/go-logr/logr"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	sutils "github.com/kabanero-io/kabanero-operator/pkg/controller/stack/utils"
 	cutils "github.com/kabanero-io/kabanero-operator/pkg/controller/utils"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/utils/secret"
 
+	reference "github.com/docker/distribution/reference"
 	"github.com/docker/docker/registry"
+	imagev1 "github.com/openshift/api/image/v1"
 	pipelinev1alpha1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -33,16 +35,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
-	imagev1 "github.com/openshift/api/image/v1"
-	reference "github.com/docker/distribution/reference"
 )
 
-var log = logf.Log.WithName("controller_stack")
+var sclog = ologger.NewOperatorlogger("controller.stack.stack_controller")
 var cIDRegex = regexp.MustCompile("^[a-z]([a-z0-9-]*[a-z0-9])?$")
 
 // Add creates a new Stack Controller and adds it to the Manager. The Manager will set fields on the Controller
@@ -109,30 +108,35 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	// Watch for changes to Stack Tekton Pipeline objects
 	err = c.Watch(&source.Kind{Type: &pipelinev1alpha1.Pipeline{}}, tH, tPred)
 	if err != nil {
-		log.Info(fmt.Sprintf("Tekton Pipelines may not be installed"))
+		sclog.Info(fmt.Sprintf("Tekton Pipelines may not be installed"))
 		return err
 	}
 
 	err = c.Watch(&source.Kind{Type: &pipelinev1alpha1.Task{}}, tH, tPred)
 	if err != nil {
-		log.Info(fmt.Sprintf("Tekton Pipelines may not be installed"))
+		sclog.Info(fmt.Sprintf("Tekton Pipelines may not be installed"))
 		return err
 	}
 
 	err = c.Watch(&source.Kind{Type: &pipelinev1alpha1.Condition{}}, tH, tPred)
 	if err != nil {
-		log.Info(fmt.Sprintf("Tekton Pipelines may not be installed"))
+		sclog.Info(fmt.Sprintf("Tekton Pipelines may not be installed"))
+		return err
+	}
+
+	err = c.Watch(&source.Kind{Type: &pipelinev1alpha1.Condition{}}, tH, tPred)
+	if err != nil {
+		sclog.Info(fmt.Sprintf("Tekton Pipelines may not be installed"))
 		return err
 	}
 
 	// Index ImageStreams by status.publicDockerImageRepository
 	if err := mgr.GetFieldIndexer().IndexField(&imagev1.ImageStream{}, "status.publicDockerImageRepository", func(rawObj k8runtime.Object) []string {
 		imagestream := rawObj.(*imagev1.ImageStream)
-		return []string{imagestream.Status.PublicDockerImageRepository }
+		return []string{imagestream.Status.PublicDockerImageRepository}
 	}); err != nil {
 		return err
 	}
-
 
 	return nil
 }
@@ -148,7 +152,7 @@ type ReconcileStack struct {
 	scheme *k8runtime.Scheme
 
 	//The indexResolver which will be used during reconciliation
-	indexResolver func(client.Client, kabanerov1alpha2.RepositoryConfig, string, []Pipelines, []Trigger, string, logr.Logger) (*Index, error)
+	indexResolver func(client.Client, kabanerov1alpha2.RepositoryConfig, string, []Pipelines, []Trigger, string) (*Index, error)
 }
 
 // Reconcile reads that state of the cluster for a Stack object and makes changes based on the state read
@@ -160,9 +164,6 @@ type ReconcileStack struct {
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileStack) Reconcile(request reconcile.Request) (reconcile.Result, error) {
 	ctx := context.Background()
-
-	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
-	reqLogger.Info("Reconciling Stack")
 
 	// Fetch the Stack instance
 	instance := &kabanerov1alpha2.Stack{}
@@ -179,7 +180,7 @@ func (r *ReconcileStack) Reconcile(request reconcile.Request) (reconcile.Result,
 	}
 
 	// If the stack is being deleted, and our finalizer is set, process it.
-	beingDeleted, err := processDeletion(ctx, instance, r.client, reqLogger)
+	beingDeleted, err := processDeletion(ctx, instance, r.client)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -196,7 +197,7 @@ func (r *ReconcileStack) Reconcile(request reconcile.Request) (reconcile.Result,
 	// they are hosted outside of Kubernetes, the controller will not see when they
 	// are updated.
 	if failedAssets(instance.Status) && (rr.Requeue == false) {
-		reqLogger.Info("Forcing requeue due to failed assets in the Stack")
+		sclog.Warning("Forcing requeue due to failed assets in the Stack")
 		rr.Requeue = true
 		rr.RequeueAfter = 60 * time.Second
 	}
@@ -206,7 +207,7 @@ func (r *ReconcileStack) Reconcile(request reconcile.Request) (reconcile.Result,
 	// These should be retried, and since they are hosted outside of Kubernetes.
 	_, errorSummary := stackSummary(instance.Status)
 	if len(errorSummary) != 0 && (rr.Requeue == false) {
-		reqLogger.Info(fmt.Sprintf("An error was detected on one or more versions of stack %v. Error version summary: [%v]. Forcing requeue.", instance.Name, errorSummary))
+		sclog.Warning(fmt.Sprintf("An error was detected on one or more versions of stack %v. Error version summary: [%v]. Forcing requeue.", instance.Name, errorSummary))
 		rr.Requeue = true
 		rr.RequeueAfter = 60 * time.Second
 	}
@@ -250,27 +251,14 @@ type resolvedStack struct {
 
 // ReconcileStack activates or deactivates the input stack.
 func (r *ReconcileStack) ReconcileStack(c *kabanerov1alpha2.Stack) (reconcile.Result, error) {
-	r_log := log.WithValues("Request.Namespace", c.GetNamespace()).WithValues("Request.Name", c.GetName())
-
 	// Clear the status message, we'll generate a new one if necessary
 	c.Status.StatusMessage = ""
 
-	//The stack name can be either the spec.name or the resource name. The
-	//spec.name has precedence
-	var stackName string
-	if c.Spec.Name != "" {
-		stackName = c.Spec.Name
-	} else {
-		stackName = c.Name
-	}
-
-	r_log = r_log.WithValues("Stack.Name", stackName)
-
 	// Process the versions array and activate (or deactivate) the desired versions.
-	err := reconcileActiveVersions(c, r.client, r_log)
+	err := reconcileActiveVersions(c, r.client)
 	if err != nil {
 		// TODO - what is useful to print?
-		log.Error(err, fmt.Sprintf("Error during reconcileActiveVersions"))
+		sclog.Error(err, fmt.Sprintf("Error during reconcileActiveVersions"))
 	}
 
 	return reconcile.Result{}, nil
@@ -279,7 +267,7 @@ func (r *ReconcileStack) ReconcileStack(c *kabanerov1alpha2.Stack) (reconcile.Re
 func gitReleaseSpecToGitReleaseInfo(gitRelease kabanerov1alpha2.GitReleaseSpec) kabanerov1alpha2.GitReleaseInfo {
 	return kabanerov1alpha2.GitReleaseInfo{Hostname: gitRelease.Hostname, Organization: gitRelease.Organization, Project: gitRelease.Project, Release: gitRelease.Release, AssetName: gitRelease.AssetName}
 }
-func reconcileActiveVersions(stackResource *kabanerov1alpha2.Stack, c client.Client, logger logr.Logger) error {
+func reconcileActiveVersions(stackResource *kabanerov1alpha2.Stack, c client.Client) error {
 
 	// Gather the known stack asset (*-tasks, *-pipeline) substitution data.
 	renderingContext := make(map[string]interface{})
@@ -310,7 +298,7 @@ func reconcileActiveVersions(stackResource *kabanerov1alpha2.Stack, c client.Cli
 	}
 
 	// Activate the pipelines used by this stack.
-	assetUseMap, err := cutils.ActivatePipelines(stackResource.Spec, stackResource.Status, stackResource.GetNamespace(), renderingContext, assetOwner, c, logger)
+	assetUseMap, err := cutils.ActivatePipelines(stackResource.Spec, stackResource.Status, stackResource.GetNamespace(), renderingContext, assetOwner, c)
 
 	if err != nil {
 		return err
@@ -361,7 +349,7 @@ func reconcileActiveVersions(stackResource *kabanerov1alpha2.Stack, c client.Cli
 
 			// Update the status of the Stack object to reflect the images used
 			for _, img := range curSpec.Images {
-				digest, err := getStatusImageDigest(c, *stackResource, curSpec, img.Image, logger)
+				digest, err := getStatusImageDigest(c, *stackResource, curSpec, img.Image)
 				if err != nil {
 					newStackVersionStatus.Status = kabanerov1alpha2.StackStateError
 				}
@@ -372,7 +360,7 @@ func reconcileActiveVersions(stackResource *kabanerov1alpha2.Stack, c client.Cli
 			newStackVersionStatus.StatusMessage = "The stack has been deactivated."
 		}
 
-		log.Info(fmt.Sprintf("Updated stack status: %+v", newStackVersionStatus))
+		sclog.Info(fmt.Sprintf("Updated stack status: %+v", newStackVersionStatus))
 		newStackStatus.Versions = append(newStackStatus.Versions, newStackVersionStatus)
 	}
 
@@ -397,7 +385,7 @@ func getStackForSpecVersion(spec kabanerov1alpha2.StackVersion, stacks []resolve
 // not the activation digest. More precisely, the digest may not necessarily be the initial activation digest
 // because we allow stack activation despite there being a failure when retrieving the digest and the
 // image/digest may have changed before the next successful retry.
-func getStatusImageDigest(c client.Client, stackResource kabanerov1alpha2.Stack, curSpec kabanerov1alpha2.StackVersion, targetImg string, logger logr.Logger) (kabanerov1alpha2.ImageDigest, error) {
+func getStatusImageDigest(c client.Client, stackResource kabanerov1alpha2.Stack, curSpec kabanerov1alpha2.StackVersion, targetImg string) (kabanerov1alpha2.ImageDigest, error) {
 	digest := kabanerov1alpha2.ImageDigest{}
 	foundTargetImage := false
 
@@ -430,7 +418,7 @@ func getStatusImageDigest(c client.Client, stackResource kabanerov1alpha2.Stack,
 			digest.Message = fmt.Sprintf("Unable to parse registry from image: %v. Associated stack: %v %v. Error: %v", img, stackResource.Spec.Name, curSpec.Version, err)
 			return digest, err
 		} else {
-			imgDig, err := retrieveImageDigest(c, stackResource.GetNamespace(), registry, curSpec.SkipRegistryCertVerification, logger, img)
+			imgDig, err := retrieveImageDigest(c, stackResource.GetNamespace(), registry, curSpec.SkipRegistryCertVerification, img)
 			if err != nil {
 				digest.Message = fmt.Sprintf("Unable to retrieve stack activation digest for image: %v. Associated stack: %v %v. Error: %v", img, stackResource.Spec.Name, curSpec.Version, err)
 				return digest, err
@@ -444,7 +432,7 @@ func getStatusImageDigest(c client.Client, stackResource kabanerov1alpha2.Stack,
 }
 
 // Retrieves the input image digest from the hosting repository.
-func retrieveImageDigest(c client.Client, namespace string, imgRegistry string, skipCertVerification bool, logr logr.Logger, image string) (string, error) {
+func retrieveImageDigest(c client.Client, namespace string, imgRegistry string, skipCertVerification bool, image string) (string, error) {
 	// Check if the image is in the local registry - imagestream using the external route
 	iref, err := reference.ParseAnyReference(image)
 	if err != nil {
@@ -454,10 +442,10 @@ func retrieveImageDigest(c client.Client, namespace string, imgRegistry string, 
 	if err != nil {
 		return "", err
 	}
-	
+
 	// ensure latest tag is added if not present
 	namedtagged := reference.TagNameOnly(named)
-	
+
 	// domain & path (no tag/digest)
 	imagename := namedtagged.Name()
 
@@ -473,7 +461,7 @@ func retrieveImageDigest(c client.Client, namespace string, imgRegistry string, 
 			return "", newError
 		}
 	}
-	
+
 	// Should only have 1 ImageStream with a matching publicDockerImageRepository
 	// Get the Image sha256 for the tagged image
 	if len(imagestreamlist.Items) != 0 {
@@ -485,7 +473,7 @@ func retrieveImageDigest(c client.Client, namespace string, imgRegistry string, 
 			}
 		}
 	}
-	
+
 	// Search all secrets under the given namespace for the one containing the required hostname.
 	annotationKey := "kabanero.io/docker-"
 	secret, err := secret.GetMatchingSecret(c, namespace, sutils.SecretAnnotationFilter, imgRegistry, annotationKey)
@@ -501,7 +489,7 @@ func retrieveImageDigest(c client.Client, namespace string, imgRegistry string, 
 	var dockerconfigjson []byte
 
 	if secret != nil {
-		logr.Info(fmt.Sprintf("Secret used for image registry access: %v. Secret annotations: %v", secret.GetName(), secret.Annotations))
+		sclog.Info(fmt.Sprintf("Secret used for image registry access: %v. Secret annotations: %v", secret.GetName(), secret.Annotations))
 		username, _ = secret.Data[corev1.BasicAuthUsernameKey]
 		password, _ = secret.Data[corev1.BasicAuthPasswordKey]
 		dockerconfig, _ = secret.Data[corev1.DockerConfigKey]
@@ -516,7 +504,7 @@ func retrieveImageDigest(c client.Client, namespace string, imgRegistry string, 
 			return "", err
 		}
 	} else if len(dockerconfig) != 0 || len(dockerconfigjson) != 0 {
-		authenticator, err = getDockerCfgSecAuth(dockerconfigjson, dockerconfig, imgRegistry, logr)
+		authenticator, err = getDockerCfgSecAuth(dockerconfigjson, dockerconfig, imgRegistry)
 		if err != nil {
 			return "", err
 		}
@@ -563,7 +551,7 @@ func getBasicSecAuth(username []byte, password []byte) (authn.Authenticator, err
 
 // Returns an authenticator object containing docker config credentials.
 // It handles both legacy .dockercfg file data and docker.json file data.
-func getDockerCfgSecAuth(dockerconfigjson []byte, dockerconfig []byte, imgRegistry string, reqLogger logr.Logger) (authn.Authenticator, error) {
+func getDockerCfgSecAuth(dockerconfigjson []byte, dockerconfig []byte, imgRegistry string) (authn.Authenticator, error) {
 	// Read the docker config data into a configFile object.
 	var dcf *configfile.ConfigFile
 	if len(dockerconfigjson) != 0 {
@@ -586,7 +574,7 @@ func getDockerCfgSecAuth(dockerconfigjson []byte, dockerconfig []byte, imgRegist
 	// If the docker config entry in the secret does not have an authentication entry, default
 	// to Anonymous authentication.
 	if !dcf.ContainsAuth() {
-		reqLogger.Info(fmt.Sprintf("Security credentials for server name: %v could not be found. The docker config data did not contain any authentication information.", key))
+		sclog.Info(fmt.Sprintf("Security credentials for server name: %v could not be found. The docker config data did not contain any authentication information.", key))
 		return authn.Anonymous, nil
 	}
 
@@ -605,7 +593,7 @@ func getDockerCfgSecAuth(dockerconfigjson []byte, dockerconfig []byte, imgRegist
 
 	// No match was found for the server name key. Default to anonymous authentication.
 	if cfg == (types.AuthConfig{}) {
-		reqLogger.Info(fmt.Sprintf("Security credentials for server name: %v could not be found. The credential store or docker config data did not contain the security credentials for the mentioned server.", key))
+		sclog.Info(fmt.Sprintf("Security credentials for server name: %v could not be found. The credential store or docker config data did not contain the security credentials for the mentioned server.", key))
 		return authn.Anonymous, nil
 	}
 
@@ -640,7 +628,7 @@ func resolveDockerConfRegKey(imgRegistry string) string {
 
 // Drives stack instance deletion processing. This includes creating a finalizer, handling
 // stack instance cleanup logic, and finalizer removal.
-func processDeletion(ctx context.Context, stack *kabanerov1alpha2.Stack, c client.Client, reqLogger logr.Logger) (bool, error) {
+func processDeletion(ctx context.Context, stack *kabanerov1alpha2.Stack, c client.Client) (bool, error) {
 	// The stack instance is not deleted. Create a finalizer if it was not created already.
 	stackFinalizer := "kabanero.io/stack-controller"
 	foundFinalizer := false
@@ -656,7 +644,7 @@ func processDeletion(ctx context.Context, stack *kabanerov1alpha2.Stack, c clien
 			stack.Finalizers = append(stack.Finalizers, stackFinalizer)
 			err := c.Update(ctx, stack)
 			if err != nil {
-				reqLogger.Error(err, "Unable to set the stack controller finalizer.")
+				sclog.Error(err, "Unable to set the stack controller finalizer.")
 				return beingDeleted, err
 			}
 		}
@@ -667,9 +655,9 @@ func processDeletion(ctx context.Context, stack *kabanerov1alpha2.Stack, c clien
 	// The instance is being deleted.
 	if foundFinalizer {
 		// Drive stack cleanup processing.
-		err := cleanup(ctx, stack, c, reqLogger)
+		err := cleanup(ctx, stack, c)
 		if err != nil {
-			reqLogger.Error(err, "Error during cleanup processing.")
+			sclog.Error(err, "Error during cleanup processing.")
 			return beingDeleted, err
 		}
 
@@ -686,7 +674,7 @@ func processDeletion(ctx context.Context, stack *kabanerov1alpha2.Stack, c clien
 		err = c.Update(ctx, stack)
 
 		if err != nil {
-			reqLogger.Error(err, "Error while attempting to remove the finalizer.")
+			sclog.Error(err, "Error while attempting to remove the finalizer.")
 			return beingDeleted, err
 		}
 	}
@@ -695,7 +683,7 @@ func processDeletion(ctx context.Context, stack *kabanerov1alpha2.Stack, c clien
 }
 
 // Handles the finalizer cleanup logic for the Stack instance.
-func cleanup(ctx context.Context, stack *kabanerov1alpha2.Stack, c client.Client, reqLogger logr.Logger) error {
+func cleanup(ctx context.Context, stack *kabanerov1alpha2.Stack, c client.Client) error {
 	ownerIsController := false
 	assetOwner := metav1.OwnerReference{
 		APIVersion: stack.APIVersion,
@@ -715,7 +703,7 @@ func cleanup(ctx context.Context, stack *kabanerov1alpha2.Stack, c client.Client
 					asset.Namespace = stack.GetNamespace()
 				}
 
-				cutils.DeleteAsset(c, asset, assetOwner, reqLogger)
+				cutils.DeleteAsset(c, asset, assetOwner)
 			}
 		}
 	}

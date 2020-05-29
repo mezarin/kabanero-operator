@@ -4,16 +4,17 @@ import (
 	"context"
 
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	cutils "github.com/kabanero-io/kabanero-operator/pkg/controller/utils"
-	"github.com/go-logr/logr"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+var gitopslog = ologger.NewOperatorlogger("controller.kabaneropletform.gitops")
+
 // Activates the Gitops pipelines
-func reconcileGitopsPipelines(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
-	reqLogger.Info("Reconciling Gitops pipelines.")
+func reconcileGitopsPipelines(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
+	gitopslog.Info("Reconciling Gitops pipelines.")
 
 	// Gather the known asset (*-tasks, *-pipeline) substitution data.  (none presently)
 	renderingContext := make(map[string]interface{})
@@ -29,12 +30,12 @@ func reconcileGitopsPipelines(ctx context.Context, k *kabanerov1alpha2.Kabanero,
 	}
 
 	// Activate the pipelines used by the gitops repository
-	assetUseMap, err := cutils.ActivatePipelines(k.Spec.Gitops, k.Status.Gitops, k.GetNamespace(), renderingContext, assetOwner, c, reqLogger)
+	assetUseMap, err := cutils.ActivatePipelines(k.Spec.Gitops, k.Status.Gitops, k.GetNamespace(), renderingContext, assetOwner, c)
 
 	if err != nil {
 		return err
 	}
-	
+
 	// Now update the GitopsStatus to reflect the current state of things.
 	newGitopsStatus := kabanerov1alpha2.GitopsStatus{Ready: "True"}
 	for _, pipeline := range k.Spec.Gitops.Pipelines {
@@ -71,7 +72,7 @@ func reconcileGitopsPipelines(ctx context.Context, k *kabanerov1alpha2.Kabanero,
 	if len(newGitopsStatus.Message) != 0 {
 		newGitopsStatus.Ready = "False"
 	}
-	
+
 	k.Status.Gitops = newGitopsStatus
 
 	return nil
@@ -82,8 +83,8 @@ func gitReleaseSpecToGitReleaseInfo(gitRelease kabanerov1alpha2.GitReleaseSpec) 
 }
 
 // Removes the cross-namespace objects created during the gitops pipelines deployment
-func cleanupGitopsPipelines(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
-	reqLogger.Info("Removing Gitops pipelines.")
+func cleanupGitopsPipelines(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
+	gitopslog.Info("Removing Gitops pipelines.")
 
 	ownerIsController := false
 	assetOwner := metav1.OwnerReference{
@@ -102,8 +103,8 @@ func cleanupGitopsPipelines(ctx context.Context, k *kabanerov1alpha2.Kabanero, c
 			if len(asset.Namespace) == 0 {
 				asset.Namespace = k.GetNamespace()
 			}
-			
-			cutils.DeleteAsset(c, asset, assetOwner, reqLogger)
+
+			cutils.DeleteAsset(c, asset, assetOwner)
 		}
 	}
 

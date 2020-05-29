@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,8 +13,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+var dlog = ologger.NewOperatorlogger("controller.kabaneroplatform.utils.deployments")
+
 // Retrieves an OwnerRereference object populated with the Kabanero operator information.
-func getOwnerReference(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) (metav1.OwnerReference, error) {
+func getOwnerReference(k *kabanerov1alpha2.Kabanero, c client.Client) (metav1.OwnerReference, error) {
 	ownerIsController := true
 	kInstance := &kabanerov1alpha2.Kabanero{}
 	err := c.Get(context.Background(), types.NamespacedName{
@@ -33,7 +35,7 @@ func getOwnerReference(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger 
 		Controller: &ownerIsController,
 	}
 
-	reqLogger.Info(fmt.Sprintf("getOwnerReference: OwnerReference: %v", ownerRef))
+	dlog.Info(fmt.Sprintf("getOwnerReference: OwnerReference: %v", ownerRef))
 
 	return ownerRef, err
 }

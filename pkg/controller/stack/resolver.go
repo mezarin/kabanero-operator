@@ -4,21 +4,24 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/utils/cache"
+	"github.com/prometheus/common/log"
 	"gopkg.in/yaml.v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+var rlog = ologger.NewOperatorlogger("controller.stack.resolver")
+
 // ResolveIndex returns a structure representation of the yaml file represented by the index.
-func ResolveIndex(c client.Client, repoConf kabanerov1alpha2.RepositoryConfig, namespace string, pipelines []Pipelines, triggers []Trigger, imagePrefix string, reqLogger logr.Logger) (*Index, error) {
+func ResolveIndex(c client.Client, repoConf kabanerov1alpha2.RepositoryConfig, namespace string, pipelines []Pipelines, triggers []Trigger, imagePrefix string) (*Index, error) {
 	var indexBytes []byte
 
 	switch {
 	// GIT:
 	case repoConf.GitRelease.IsUsable():
-		bytes, err := cache.GetStackDataUsingGit(c, gitReleaseSpecToGitReleaseInfo(repoConf.GitRelease), repoConf.GitRelease.SkipCertVerification, namespace, reqLogger)
+		bytes, err := cache.GetStackDataUsingGit(c, gitReleaseSpecToGitReleaseInfo(repoConf.GitRelease), repoConf.GitRelease.SkipCertVerification, namespace)
 		if err != nil {
 			return nil, err
 		}

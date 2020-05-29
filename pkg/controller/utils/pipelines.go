@@ -4,18 +4,20 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/transforms"
-	mfc "github.com/manifestival/controller-runtime-client"
+
 	mf "github.com/manifestival/manifestival"
 
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var uplog = ologger.NewOperatorlogger("controller.utils.pipelines")
 
 const (
 	// Asset status.
@@ -51,7 +53,7 @@ func gitReleaseSpecToGitReleaseInfo(gitRelease kabanerov1alpha2.GitReleaseSpec) 
 	return kabanerov1alpha2.GitReleaseInfo{Hostname: gitRelease.Hostname, Organization: gitRelease.Organization, Project: gitRelease.Project, Release: gitRelease.Release, AssetName: gitRelease.AssetName}
 }
 
-func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alpha2.ComponentStatus, targetNamespace string, renderingContext map[string]interface{}, assetOwner metav1.OwnerReference, c client.Client, logger logr.Logger) (PipelineUseMap, error) {
+func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alpha2.ComponentStatus, targetNamespace string, renderingContext map[string]interface{}, assetOwner metav1.OwnerReference, c client.Client) (PipelineUseMap, error) {
 
 	// Multiple versions of the same stack, could be using the same pipeline zip.  Count how many
 	// times each pipeline has been used.
@@ -138,7 +140,7 @@ func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alp
 	// and create any assets with a positive use count.
 	for _, value := range assetUseMap {
 		if value.useCount <= 0 {
-			logger.Info(fmt.Sprintf("Deleting assets with use count %v: %v", value.useCount, value))
+			uplog.Info(fmt.Sprintf("Deleting assets with use count %v: %v", value.useCount, value))
 
 			for _, asset := range value.ActiveAssets {
 				// Old assets may not have a namespace set - correct that now.
@@ -146,14 +148,14 @@ func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alp
 					asset.Namespace = targetNamespace
 				}
 
-				DeleteAsset(c, asset, assetOwner, logger)
+				DeleteAsset(c, asset, assetOwner)
 			}
 		}
 	}
 
 	for key, value := range assetUseMap {
 		if value.useCount > 0 {
-			logger.Info(fmt.Sprintf("Creating assets with use count %v: %v", value.useCount, value))
+			uplog.Info(fmt.Sprintf("Creating assets with use count %v: %v", value.useCount, value))
 
 			// Check to see if there is already an asset list.  If not, read the manifests and
 			// create one.
@@ -168,9 +170,9 @@ func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alp
 				}
 
 				// Retrieve manifests as unstructured.  If we could not get them, skip.
-				manifests, err := GetManifests(c, targetNamespace, value.PipelineStatus, renderingContext, certVerification[key], logger)
+				manifests, err := GetManifests(c, targetNamespace, value.PipelineStatus, renderingContext, certVerification[key])
 				if err != nil {
-					logger.Error(err, fmt.Sprintf("Error retrieving archive manifests: %v", value))
+					uplog.Error(err, fmt.Sprintf("Error retrieving archive manifests: %v", value))
 					value.ManifestError = err
 					continue
 				}
@@ -216,7 +218,7 @@ func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alp
 
 				if err != nil {
 					if errors.IsNotFound(err) == false {
-						logger.Error(err, fmt.Sprintf("Unable to check asset name %v", asset.Name))
+						uplog.Error(err, fmt.Sprintf("Unable to check asset name %v", asset.Name))
 						value.ActiveAssets[index].Status = AssetStatusUnknown
 						value.ActiveAssets[index].StatusMessage = "Unable to check asset: " + err.Error()
 					} else {
@@ -230,9 +232,9 @@ func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alp
 							}
 
 							// Retrieve manifests as unstructured
-							manifests, err := GetManifests(c, targetNamespace, value.PipelineStatus, renderingContext, certVerification[key], logger)
+							manifests, err := GetManifests(c, targetNamespace, value.PipelineStatus, renderingContext, certVerification[key])
 							if err != nil {
-								logger.Error(err, fmt.Sprintf("Object %v not found and manifests not available: %v", asset.Name, value))
+								uplog.Error(err, fmt.Sprintf("Object %v not found and manifests not available: %v", asset.Name, value))
 								value.ActiveAssets[index].Status = AssetStatusFailed
 								value.ActiveAssets[index].StatusMessage = "Manifests are no longer available at specified URL"
 							} else {
@@ -257,9 +259,8 @@ func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alp
 								}
 
 								if allowed == true {
-									mOrig, err := mf.ManifestFrom(mf.Slice(resources), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
-
-									logger.Info(fmt.Sprintf("Resources: %v", mOrig.Resources()))
+									mOrig, err := ologger.ManifestFrom(c, mf.Slice(resources), uplog)
+									uplog.Info(fmt.Sprintf("Resources: %v", mOrig.Resources()))
 
 									transforms := []mf.Transformer{
 										transforms.InjectOwnerReference(assetOwner),
@@ -268,15 +269,15 @@ func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alp
 
 									m, err := mOrig.Transform(transforms...)
 									if err != nil {
-										logger.Error(err, fmt.Sprintf("Error transforming manifests for %v", asset.Name))
+										uplog.Error(err, fmt.Sprintf("Error transforming manifests for %v", asset.Name))
 										value.ActiveAssets[index].Status = AssetStatusFailed
 										value.ActiveAssets[index].Status = err.Error()
 									} else {
-										logger.Info(fmt.Sprintf("Applying resources: %v", m.Resources()))
+										uplog.Info(fmt.Sprintf("Applying resources: %v", m.Resources()))
 										err = m.Apply()
 										if err != nil {
 											// Update the asset status with the error message
-											logger.Error(err, "Error installing the resource", "resource", asset.Name)
+											uplog.Error(err, "Error installing the resource", "resource", asset.Name)
 											value.ActiveAssets[index].Status = AssetStatusFailed
 											value.ActiveAssets[index].StatusMessage = err.Error()
 										} else {
@@ -307,7 +308,7 @@ func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alp
 
 						err = c.Update(context.TODO(), u)
 						if err != nil {
-							logger.Error(err, fmt.Sprintf("Unable to add owner reference to %v", asset.Name))
+							uplog.Error(err, fmt.Sprintf("Unable to add owner reference to %v", asset.Name))
 						}
 					}
 
@@ -322,9 +323,9 @@ func ActivatePipelines(spec kabanerov1alpha2.ComponentSpec, status kabanerov1alp
 }
 
 // Deletes an asset.  This can mean removing an object owner, or completely deleting it.
-func DeleteAsset(c client.Client, asset kabanerov1alpha2.RepositoryAssetStatus, assetOwner metav1.OwnerReference, logger logr.Logger) error {
+func DeleteAsset(c client.Client, asset kabanerov1alpha2.RepositoryAssetStatus, assetOwner metav1.OwnerReference) error {
 	if asset.Status == AssetStatusUnknown || asset.Status == AssetStatusFailed {
-		logger.Info(fmt.Sprintf("Ignoring delete processing for asset with failed or unknown status. Asset name: %v. Namespace %v. Status: %v", asset.Name, asset.Namespace, asset.Status))
+		uplog.Info(fmt.Sprintf("Ignoring delete processing for asset with failed or unknown status. Asset name: %v. Namespace %v. Status: %v", asset.Name, asset.Namespace, asset.Status))
 		return nil
 	}
 
@@ -342,7 +343,7 @@ func DeleteAsset(c client.Client, asset kabanerov1alpha2.RepositoryAssetStatus, 
 
 	if err != nil {
 		if errors.IsNotFound(err) == false {
-			logger.Error(err, fmt.Sprintf("Unable to retrieve asset %v in namespace %v. Status: %v", asset.Name, asset.Namespace, asset.Status))
+			uplog.Error(err, fmt.Sprintf("Unable to retrieve asset %v in namespace %v. Status: %v", asset.Name, asset.Namespace, asset.Status))
 			return err
 		}
 	} else {
@@ -358,14 +359,14 @@ func DeleteAsset(c client.Client, asset kabanerov1alpha2.RepositoryAssetStatus, 
 		if len(newOwnerRefs) == 0 {
 			err = c.Delete(context.TODO(), u)
 			if err != nil {
-				logger.Error(err, fmt.Sprintf("Unable to delete asset name %v in namespace %v. Status: %v", asset.Name, asset.Namespace, asset.Status))
+				uplog.Error(err, fmt.Sprintf("Unable to delete asset name %v in namespace %v. Status: %v", asset.Name, asset.Namespace, asset.Status))
 				return err
 			}
 		} else {
 			u.SetOwnerReferences(newOwnerRefs)
 			err = c.Update(context.TODO(), u)
 			if err != nil {
-				logger.Error(err, fmt.Sprintf("Unable to delete owner reference from %v in namespace %v. Status: %v", asset.Name, asset.Namespace, asset.Status))
+				uplog.Error(err, fmt.Sprintf("Unable to delete owner reference from %v in namespace %v. Status: %v", asset.Name, asset.Namespace, asset.Status))
 				return err
 			}
 		}

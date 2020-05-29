@@ -9,14 +9,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha1 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha1"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
-  "github.com/kabanero-io/kabanero-operator/pkg/controller/utils/timer"
-
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
+	"github.com/kabanero-io/kabanero-operator/pkg/controller/utils/timer"
+	"github.com/prometheus/common/log"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -25,20 +26,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
-var log = logf.Log.WithName("controller_kabaneroplatform")
+var kccl = ologger.NewOperatorlogger("controller.kabaneroplatform.kabaneroplatform_controller")
 var ctrlr controller.Controller
 var operatorContainerImage string
 var operatorContainerImageOp sync.Once
 
 // A list of functions driven by the reconciler
-type reconcileFunc func(context.Context, *kabanerov1alpha2.Kabanero, client.Client, logr.Logger) error
+type reconcileFunc func(context.Context, *kabanerov1alpha2.Kabanero, client.Client) error
 
 type reconcileFuncType struct {
 	name     string
@@ -104,7 +104,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-/* Useful if RoleBindingList is changed to use Structured instead of Unstructured
+	/* Useful if RoleBindingList is changed to use Structured instead of Unstructured
 	// Index Rolebindings by name
 	if err := mgr.GetFieldIndexer().IndexField(&rbacv1.RoleBinding{}, "metadata.name", func(rawObj runtime.Object) []string {
 		rolebinding := rawObj.(*rbacv1.RoleBinding)
@@ -112,7 +112,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}); err != nil {
 		return err
 	}
-*/
+	*/
 
 	return nil
 }
@@ -128,15 +128,15 @@ func getOperatorImage(c client.Client) (string, error) {
 	if len(namespace) == 0 {
 		return "", fmt.Errorf("The WATCH_NAMESPACE environment variable is not set, or is empty")
 	}
-	
+
 	// Second, get the Pod instance with that name
 	pod := &corev1.Pod{}
 	kubePodName := types.NamespacedName{Name: podName, Namespace: namespace}
 	err := c.Get(context.TODO(), kubePodName, pod)
 	if err != nil {
 		return "", fmt.Errorf("Pod %v could not be retrieved: %v", podName, err.Error())
-	} 
-	
+	}
+
 	// Third, parse out the container name, then the image
 	for _, container := range pod.Spec.Containers {
 		if container.Name == "kabanero-operator" {
@@ -146,7 +146,6 @@ func getOperatorImage(c client.Client) (string, error) {
 
 	return "", fmt.Errorf("No container named 'kabanero-operator' was found in Pod %v", podName)
 }
-
 
 // Returns a watch handler.
 func getWatchHandlerForKabaneroOwner() *handler.EnqueueRequestForOwner {
@@ -188,7 +187,7 @@ type RequeueData struct {
 // Determine if requeue is needed or not.
 // If requeue is required set RequeueAfter to 60 seconds the first time.
 // After the first time increase RequeueAfter by 60 seconds up to a max of 15 minutes.
-func (r *ReconcileKabanero) determineHowToRequeue(ctx context.Context, request reconcile.Request, instance *kabanerov1alpha2.Kabanero, errorMessage string, requeueDelayMap map[string]RequeueData, reqLogger logr.Logger) (reconcile.Result, error) {
+func (r *ReconcileKabanero) determineHowToRequeue(ctx context.Context, request reconcile.Request, instance *kabanerov1alpha2.Kabanero, errorMessage string, requeueDelayMap map[string]RequeueData) (reconcile.Result, error) {
 	var requeueDelay int
 	var localFutureTime time.Time
 	requeueData, ok := requeueDelayMap[request.Namespace]
@@ -211,7 +210,7 @@ func (r *ReconcileKabanero) determineHowToRequeue(ctx context.Context, request r
 			// Update the kabanero instance status.
 			err := r.client.Status().Update(ctx, instance)
 			if err != nil {
-				reqLogger.Error(err, "Error updating Kabanero status.")
+				kccl.Error(err, "Error updating Kabanero status.")
 			}
 		}
 		// increase delay by 60 seconds
@@ -222,7 +221,7 @@ func (r *ReconcileKabanero) determineHowToRequeue(ctx context.Context, request r
 		}
 		localFutureTime = currentTime.Add(time.Duration(requeueDelay) * time.Second)
 		requeueDelayMap[request.Namespace] = RequeueData{requeueDelay, localFutureTime}
-		reqLogger.Info(fmt.Sprintf("Reconciling Kabanero requesting requeue in %d seconds", requeueDelay))
+		kccl.Info(fmt.Sprintf("Reconciling Kabanero requesting requeue in %d seconds", requeueDelay))
 
 		return reconcile.Result{Requeue: true, RequeueAfter: time.Duration(requeueDelay) * time.Second}, nil
 	}
@@ -233,18 +232,18 @@ func (r *ReconcileKabanero) determineHowToRequeue(ctx context.Context, request r
 }
 
 // Convert a v1alpha1 Kabanero CR instance, with collection repositories, to v1alpha2
-func (r *ReconcileKabanero) convertTo_v1alpha2(kabInstanceUnstructured *unstructured.Unstructured, reqLogger logr.Logger) {
+func (r *ReconcileKabanero) convertTo_v1alpha2(kabInstanceUnstructured *unstructured.Unstructured) {
 	// First populate a v1alpha1 object from the unstructured
 	data, err := kabInstanceUnstructured.MarshalJSON()
 	if err != nil {
-		reqLogger.Error(err, "Error marshalling unstructured data: ")
+		kccl.Error(err, "Error marshalling unstructured data: ")
 		return
 	}
 
 	kabInstanceV1 := &kabanerov1alpha1.Kabanero{}
 	err = json.Unmarshal(data, kabInstanceV1)
 	if err != nil {
-		reqLogger.Error(err, "Error unmarshalling unstructured data to Kabanero v1alpha1: ")
+		kccl.Error(err, "Error unmarshalling unstructured data to Kabanero v1alpha1: ")
 		return
 	}
 
@@ -252,7 +251,7 @@ func (r *ReconcileKabanero) convertTo_v1alpha2(kabInstanceUnstructured *unstruct
 	kabInstanceV2 := &kabanerov1alpha2.Kabanero{}
 	err = json.Unmarshal(data, kabInstanceV2)
 	if err != nil {
-		reqLogger.Error(err, "Error unmarshalling unstructured data to Kabanero v1alpha2: ")
+		kccl.Error(err, "Error unmarshalling unstructured data to Kabanero v1alpha2: ")
 		return
 	}
 
@@ -269,7 +268,7 @@ func (r *ReconcileKabanero) convertTo_v1alpha2(kabInstanceUnstructured *unstruct
 	// Write the object back.
 	err = r.client.Update(context.TODO(), kabInstanceV2)
 	if err != nil {
-		reqLogger.Error(err, "Error converting to Kabanero v1alpha2: ")
+		kccl.Error(err, "Error converting to Kabanero v1alpha2: ")
 	}
 }
 
@@ -281,8 +280,27 @@ func (r *ReconcileKabanero) convertTo_v1alpha2(kabInstanceUnstructured *unstruct
 func (r *ReconcileKabanero) Reconcile(request reconcile.Request) (reconcile.Result, error) {
 	ctx := context.Background()
 
-	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
-	reqLogger.Info("Reconciling Kabanero")
+	// Fetch the Kabanero instance
+	instance := &kabanerov1alpha2.Kabanero{}
+	err := r.client.Get(context.TODO(), request.NamespacedName, instance)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Request object not found, could have been deleted after reconcile request.
+			// Owned objects are automatically garbage collected.
+			// Return and don't requeue
+			return reconcile.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		return reconcile.Result{}, err
+	}
+
+	// Read and set trace configuration.
+	err = setupLoggingConfig(r.client, instance)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	kccl.Info(fmt.Sprintf("Reconciling Kabanero. Request.Namespace: %v, Request.Name: %v", request.Namespace, request.Name))
 
 	// Retrieve the Kabanero operator image name, for use later.  Only do this once.  Can't do it
 	// in the add() method because the client is not started yet (that would have been ideal).
@@ -303,7 +321,7 @@ func (r *ReconcileKabanero) Reconcile(request reconcile.Request) (reconcile.Resu
 		Version: kabanerov1alpha2.SchemeGroupVersion.Version,
 	})
 
-	err := r.client.Get(context.TODO(), request.NamespacedName, kabInstanceUnstructured)
+	err = r.client.Get(context.TODO(), request.NamespacedName, kabInstanceUnstructured)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
@@ -318,34 +336,20 @@ func (r *ReconcileKabanero) Reconcile(request reconcile.Request) (reconcile.Resu
 	// See about the collection hub...
 	_, found, err := unstructured.NestedSlice(kabInstanceUnstructured.Object, "spec", "collections", "repositories")
 	if err != nil {
-		reqLogger.Error(err, "Unable to parse Kabanero instance for conversion")
+		kccl.Error(err, "Unable to parse Kabanero instance for conversion")
 	} else {
 		if found {
 			// Do the conversion
-			r.convertTo_v1alpha2(kabInstanceUnstructured, reqLogger)
+			r.convertTo_v1alpha2(kabInstanceUnstructured)
 			return reconcile.Result{}, nil // Will run again since we changed the object
 		}
-	}
-
-	// Fetch the Kabanero instance
-	instance := &kabanerov1alpha2.Kabanero{}
-	err = r.client.Get(context.TODO(), request.NamespacedName, instance)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			// Request object not found, could have been deleted after reconcile request.
-			// Owned objects are automatically garbage collected.
-			// Return and don't requeue
-			return reconcile.Result{}, nil
-		}
-		// Error reading the object - requeue the request.
-		return reconcile.Result{}, err
 	}
 
 	// Initializes dependency data
 	initializeDependencies(instance)
 
 	// Process kabanero instance deletion logic.
-	beingDeleted, err := processDeletion(ctx, instance, r.client, reqLogger)
+	beingDeleted, err := processDeletion(ctx, instance, r.client)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -355,53 +359,53 @@ func (r *ReconcileKabanero) Reconcile(request reconcile.Request) (reconcile.Resu
 	}
 
 	// Reconcile the admission controller webhook
-	err = reconcileAdmissionControllerWebhook(ctx, instance, r.client, reqLogger)
+	err = reconcileAdmissionControllerWebhook(ctx, instance, r.client)
 	if err != nil {
-		reqLogger.Error(err, "Error reconciling kabanero-admission-controller-webhook")
+		kccl.Error(err, "Error reconciling kabanero-admission-controller-webhook")
 		return reconcile.Result{}, err
 	}
 
 	// Wait for the admission controller webhook to be ready before we try
 	// to deploy the featured collections.
-	isAdmissionControllerWebhookReady, _ := getAdmissionControllerWebhookStatus(instance, r.client, reqLogger)
+	isAdmissionControllerWebhookReady, _ := getAdmissionControllerWebhookStatus(instance, r.client)
 	if isAdmissionControllerWebhookReady == false {
-		processStatus(ctx, request, instance, r.client, reqLogger)
+		processStatus(ctx, request, instance, r.client)
 		return reconcile.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
 	}
 
 	// Iterate the components and try to reconcile.  If something goes wrong,
 	// update the status and try again later.
 	for _, component := range reconcileFuncs {
-		err = component.function(ctx, instance, r.client, reqLogger)
+		err = component.function(ctx, instance, r.client)
 		if err != nil {
-			reqLogger.Error(err, fmt.Sprintf("Error deploying %v.", component.name))
-			processStatus(ctx, request, instance, r.client, reqLogger)
+			kccl.Error(err, fmt.Sprintf("Error deploying %v.", component.name))
+			processStatus(ctx, request, instance, r.client)
 			return reconcile.Result{}, err
 		}
 	}
 
 	// Reconcile the targetNamespaces
-	err = reconcileTargetNamespaces(ctx, instance, r.client, reqLogger)
+	err = reconcileTargetNamespaces(ctx, instance, r.client)
 	if err != nil {
-		reqLogger.Error(err, "Error reconciling targetNamespaces")
+		kccl.Error(err, "Error reconciling targetNamespaces")
 		return reconcile.Result{}, err
 	}
 
 	// Deploy feature collection resources.
-	err = reconcileFeaturedStacks(ctx, instance, r.client, reqLogger)
+	err = reconcileFeaturedStacks(ctx, instance, r.client)
 	if err != nil {
-		reqLogger.Error(err, "Error reconciling featured stacks.")
-		processStatus(ctx, request, instance, r.client, reqLogger)
-		return r.determineHowToRequeue(ctx, request, instance, err.Error(), r.requeueDelayMap, reqLogger)
+		kccl.Error(err, "Error reconciling featured stacks.")
+		processStatus(ctx, request, instance, r.client)
+		return r.determineHowToRequeue(ctx, request, instance, err.Error(), r.requeueDelayMap)
 	}
 
 	// things worked reset requeue data
 	r.requeueDelayMap[request.Namespace] = RequeueData{0, time.Now()}
 
 	// Determine the status of the kabanero operator instance and set it.
-	isReady, err := processStatus(ctx, request, instance, r.client, reqLogger)
+	isReady, err := processStatus(ctx, request, instance, r.client)
 	if err != nil {
-		reqLogger.Error(err, "Error updating the status.")
+		kccl.Error(err, "Error updating the status.")
 		return reconcile.Result{}, err
 	}
 
@@ -415,7 +419,7 @@ func (r *ReconcileKabanero) Reconcile(request reconcile.Request) (reconcile.Resu
 
 // Drives kabanero instance deletion processing. This includes creating a finalizer, handling
 // kabanero instance cleanup logic, and finalizer removal.
-func processDeletion(ctx context.Context, k *kabanerov1alpha2.Kabanero, client client.Client, reqLogger logr.Logger) (bool, error) {
+func processDeletion(ctx context.Context, k *kabanerov1alpha2.Kabanero, client client.Client) (bool, error) {
 	// The kabanero instance is not deleted. Create a finalizer if it was not created already.
 	kabaneroFinalizer := "kabanero.io.kabanero-operator"
 	foundFinalizer := isFinalizerInList(k, kabaneroFinalizer)
@@ -429,7 +433,7 @@ func processDeletion(ctx context.Context, k *kabanerov1alpha2.Kabanero, client c
 			gvk := k.GroupVersionKind()
 			err := client.Update(ctx, k)
 			if err != nil {
-				reqLogger.Error(err, "Unable to set the kabanero operator finalizer.")
+				kccl.Error(err, "Unable to set the kabanero operator finalizer.")
 				return beingDeleted, err
 			}
 			k.SetGroupVersionKind(gvk)
@@ -441,9 +445,9 @@ func processDeletion(ctx context.Context, k *kabanerov1alpha2.Kabanero, client c
 	// The instance is being deleted.
 	if foundFinalizer {
 		// Drive kabanero cleanup processing.
-		err := cleanup(ctx, k, client, reqLogger)
+		err := cleanup(ctx, k, client)
 		if err != nil {
-			reqLogger.Error(err, "Error during cleanup processing.")
+			kccl.Error(err, "Error during cleanup processing.")
 			return beingDeleted, err
 		}
 
@@ -465,7 +469,7 @@ func processDeletion(ctx context.Context, k *kabanerov1alpha2.Kabanero, client c
 		err = client.Update(ctx, k)
 
 		if err != nil {
-			reqLogger.Error(err, "Error while attempting to remove the finalizer.")
+			kccl.Error(err, "Error while attempting to remove the finalizer.")
 			return beingDeleted, err
 		}
 
@@ -476,7 +480,7 @@ func processDeletion(ctx context.Context, k *kabanerov1alpha2.Kabanero, client c
 }
 
 // Handles all cleanup logic for the Kabanero instance.
-func cleanup(ctx context.Context, k *kabanerov1alpha2.Kabanero, client client.Client, reqLogger logr.Logger) error {
+func cleanup(ctx context.Context, k *kabanerov1alpha2.Kabanero, client client.Client) error {
 	// if landing enabled
 	if k.Spec.Landing.Enable == nil || (k.Spec.Landing.Enable != nil && *(k.Spec.Landing.Enable) == true) {
 		// Remove landing page customizations for the current namespace.
@@ -487,7 +491,7 @@ func cleanup(ctx context.Context, k *kabanerov1alpha2.Kabanero, client client.Cl
 	}
 
 	// Remove the webhook configurations and friends.
-	err := cleanupAdmissionControllerWebhook(k, client, reqLogger)
+	err := cleanupAdmissionControllerWebhook(k, client)
 	if err != nil {
 		return err
 	}
@@ -511,11 +515,11 @@ func cleanup(ctx context.Context, k *kabanerov1alpha2.Kabanero, client client.Cl
 	}
 
 	// Cleanup the Gitops pipelines and their cross-namespace objects
-	err = cleanupGitopsPipelines(ctx, k, client, reqLogger)
+	err = cleanupGitopsPipelines(ctx, k, client)
 	if err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -532,7 +536,7 @@ func isFinalizerInList(k *kabanerov1alpha2.Kabanero, finalizer string) bool {
 // Retrieves Kabanero resource dependencies' readiness status to determine the Kabanero instance readiness status.
 // If all resource dependencies are in the ready state, the kabanero instance's readiness status
 // is set to true. Otherwise, it is set to false.
-func processStatus(ctx context.Context, request reconcile.Request, k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) (bool, error) {
+func processStatus(ctx context.Context, request reconcile.Request, k *kabanerov1alpha2.Kabanero, c client.Client) (bool, error) {
 	errorMessage := "One or more resource dependencies are not ready."
 	_, instanceVersion := resolveKabaneroVersion(k)
 	k.Status.KabaneroInstance.Version = instanceVersion
@@ -542,16 +546,16 @@ func processStatus(ctx context.Context, request reconcile.Request, k *kabanerov1
 	// Gather the status of all resource dependencies.
 	isCollectionControllerReady, _ := getCollectionControllerStatus(ctx, k, c)
 	isStackControllerReady, _ := getStackControllerStatus(ctx, k, c)
-	isAppsodyReady, _ := getAppsodyStatus(k, c, reqLogger)
+	isAppsodyReady, _ := getAppsodyStatus(k, c)
 	isTektonReady, _ := getTektonStatus(k, c)
-	isServerlessReady, _ := getServerlessStatus(k, c, reqLogger)
-	isCliRouteReady, _ := getCliRouteStatus(k, reqLogger, c)
+	isServerlessReady, _ := getServerlessStatus(k, c)
+	isCliRouteReady, _ := getCliRouteStatus(k, c)
 	isKabaneroLandingReady, _ := getKabaneroLandingPageStatus(k, c)
 	isKubernetesAppNavigatorReady, _ := getKappnavStatus(k, c)
 	isCRWReady, _ := getCRWStatus(ctx, k, c)
-	isEventsReady, _ := getEventsStatus(k, c, reqLogger)
-	isAdmissionControllerWebhookReady, _ := getAdmissionControllerWebhookStatus(k, c, reqLogger)
-	isSsoReady, _ := getSsoStatus(k, c, reqLogger)
+	isEventsReady, _ := getEventsStatus(k, c)
+	isAdmissionControllerWebhookReady, _ := getAdmissionControllerWebhookStatus(k, c)
+	isSsoReady, _ := getSsoStatus(k, c)
 	isGitopsReady, _ := getGitopsStatus(k)
 
 	// Set the overall status.
@@ -602,4 +606,35 @@ func processStatus(ctx context.Context, request reconcile.Request, k *kabanerov1
 func initializeDependencies(k *kabanerov1alpha2.Kabanero) {
 	// Codeready-workspaces initialization.
 	initializeCRW(k)
+}
+
+// Puts logging configured data in a config map and deploys it.
+func setupLoggingConfig(c client.Client, kInstance *kabanerov1alpha2.Kabanero) error {
+	loggingData := make(map[string]string)
+	loggingData[ologger.LOGGING_DATA_TRACE_SPEC] = kInstance.Spec.Trace.Spec
+
+	cm, new, err := ologger.GetTraceConfigMap(c, kInstance.Namespace, loggingData)
+	if err != nil {
+		return err
+	}
+
+	if new {
+		ownerIsController := true
+		ownerRef := metav1.OwnerReference{
+			APIVersion: kInstance.TypeMeta.APIVersion,
+			Kind:       kInstance.TypeMeta.Kind,
+			Name:       kInstance.ObjectMeta.Name,
+			UID:        kInstance.ObjectMeta.UID,
+			Controller: &ownerIsController,
+		}
+		cm.ObjectMeta.OwnerReferences = append(cm.ObjectMeta.OwnerReferences, ownerRef)
+		err = c.Create(context.TODO(), cm)
+	} else {
+		err = c.Update(context.TODO(), cm)
+	}
+
+	// Setup trace component.
+	ologger.SetTraceComponents(c, nil, kInstance.Namespace, loggingData)
+
+	return err
 }

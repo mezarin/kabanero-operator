@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 )
+
+var utlog = ologger.NewOperatorlogger("controller.utils.timer.timer")
 
 // GenFunc is a generic retriable function
 type GenRetryFunc func() (bool, error)
@@ -32,7 +34,7 @@ func Retry(attempts int, waitTime time.Duration, gf GenRetryFunc) error {
 type GenSchedFunc func(timeparm time.Duration)
 
 // Starts ticker task to run custom work.
-func ScheduleWork(tickerDuration time.Duration, l logr.Logger, gsf GenSchedFunc, timeparm time.Duration) {
+func ScheduleWork(tickerDuration time.Duration, gsf GenSchedFunc, timeparm time.Duration) {
 	// Start a ticker that will receive periodic requests to run the input function.
 	purgeTicker := time.NewTicker(tickerDuration)
 
@@ -43,15 +45,9 @@ func ScheduleWork(tickerDuration time.Duration, l logr.Logger, gsf GenSchedFunc,
 		for {
 			select {
 			case <-purgeTicker.C:
-				if l != nil {
-					l.Info("Started execution of scheduled custom work.")
-				}
-
+				utlog.Info("Started execution of scheduled custom work.")
 				gsf(timeparm)
-
-				if l != nil {
-					l.Info("Finished execution of scheduled custom work.")
-				}
+				utlog.Info("Finished execution of scheduled custom work.")
 			}
 		}
 	}()

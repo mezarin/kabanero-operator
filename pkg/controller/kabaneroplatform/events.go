@@ -5,21 +5,24 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"github.com/go-logr/logr"
+	"math/big"
+	"strings"
+
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
+
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	mf "github.com/manifestival/manifestival"
-	mfc "github.com/manifestival/controller-runtime-client"
 	routev1 "github.com/openshift/api/route/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"math/big"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
 )
 
-func reconcileEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger logr.Logger) error {
+var elog = ologger.NewOperatorlogger("controller.kabaneropletform.events")
+
+func reconcileEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client) error {
 
 	rev, err := resolveSoftwareRevision(k, "events", k.Spec.Events.Version)
 	if err != nil {
@@ -28,7 +31,7 @@ func reconcileEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl clien
 
 	// The Events entry was not configured in the spec.  We should disable it.
 	if k.Spec.Events.IsEnabled(rev.Version) == false {
-		cleanupEvents(ctx, k, cl, reqLogger)
+		cleanupEvents(ctx, k, cl)
 		return nil
 	}
 
@@ -54,7 +57,7 @@ func reconcileEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl clien
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(cl)), mf.UseLogger(reqLogger.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(cl, mf.Reader(strings.NewReader(s)), elog)
 	if err != nil {
 		return err
 	}
@@ -77,7 +80,7 @@ func reconcileEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl clien
 	// Create the default events secret, if we don't already have one.  Only
 	// the initial version of events needs this.
 	if rev.Version == "0.1.0" {
-		err = createDefaultEventsSecret(k, cl, reqLogger)
+		err = createDefaultEventsSecret(k, cl)
 		if err != nil {
 			return err
 		}
@@ -87,7 +90,7 @@ func reconcileEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl clien
 }
 
 // Remove the events resources
-func cleanupEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger logr.Logger) error {
+func cleanupEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client) error {
 	rev, err := resolveSoftwareRevision(k, "events", k.Spec.Events.Version)
 	if err != nil {
 		return err
@@ -111,7 +114,7 @@ func cleanupEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(cl)), mf.UseLogger(reqLogger.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(cl, mf.Reader(strings.NewReader(s)), elog)
 	if err != nil {
 		return err
 	}
@@ -154,7 +157,7 @@ func cleanupEvents(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.
 	return nil
 }
 
-func getEventsStatus(k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger logr.Logger) (bool, error) {
+func getEventsStatus(k *kabanerov1alpha2.Kabanero, cl client.Client) (bool, error) {
 	rev, err := resolveSoftwareRevision(k, "events", k.Spec.Events.Version)
 	if err != nil {
 		return false, err
@@ -171,7 +174,7 @@ func getEventsStatus(k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger l
 
 	// For version 0.1.0, report on the route status.
 	if rev.Version == "0.1.0" {
-		return getEventsRouteStatus(k, cl, reqLogger)
+		return getEventsRouteStatus(k, cl)
 	}
 
 	// Otherwise, report on whether the deployment is started/available
@@ -186,7 +189,7 @@ func getEventsStatus(k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger l
 }
 
 // Tries to see if the events route has been assigned a hostname.
-func getEventsRouteStatus(k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger logr.Logger) (bool, error) {
+func getEventsRouteStatus(k *kabanerov1alpha2.Kabanero, cl client.Client) (bool, error) {
 
 	// Check that the route is accepted
 	eventsRoute := &routev1.Route{}
@@ -222,7 +225,7 @@ func getEventsRouteStatus(k *kabanerov1alpha2.Kabanero, cl client.Client, reqLog
 		} else {
 			message = "An error occurred retrieving the Route object for the events"
 		}
-		reqLogger.Error(err, message)
+		elog.Error(err, message)
 		k.Status.Events.Ready = "False"
 		k.Status.Events.Message = message + ": " + err.Error()
 		k.Status.Events.Hostnames = nil
@@ -233,7 +236,7 @@ func getEventsRouteStatus(k *kabanerov1alpha2.Kabanero, cl client.Client, reqLog
 }
 
 // Creates the default events secret
-func createDefaultEventsSecret(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
+func createDefaultEventsSecret(k *kabanerov1alpha2.Kabanero, c client.Client) error {
 	secretName := "default-events-secret"
 
 	// Check if the Secret already exists.
@@ -249,7 +252,7 @@ func createDefaultEventsSecret(k *kabanerov1alpha2.Kabanero, c client.Client, re
 
 		// Not found.  Make a new one.
 		var ownerRef metav1.OwnerReference
-		ownerRef, err = getOwnerReference(k, c, reqLogger)
+		ownerRef, err = getOwnerReference(k, c)
 		if err != nil {
 			return err
 		}
@@ -276,7 +279,7 @@ func createDefaultEventsSecret(k *kabanerov1alpha2.Kabanero, c client.Client, re
 		secretMap["secret"] = buf.String()
 		secretInstance.StringData = secretMap
 
-		reqLogger.Info(fmt.Sprintf("Attempting to create the default events secret"))
+		elog.Info(fmt.Sprintf("Attempting to create the default events secret"))
 		err = c.Create(context.TODO(), secretInstance)
 	}
 

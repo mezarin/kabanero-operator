@@ -7,15 +7,14 @@ import (
 
 	kabanerov1alpha1 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha1"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
-	"github.com/go-logr/logr"
+
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	mf "github.com/manifestival/manifestival"
-	mfc "github.com/manifestival/controller-runtime-client"
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	rlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-var cclog = rlog.Log.WithName("collection-controller-install")
+var corlog = ologger.NewOperatorlogger("controller.kabaneropletform.collection-operator")
 
 const (
 	ccVersionSoftCompName   = "collection-controller"
@@ -25,21 +24,20 @@ const (
 )
 
 // Installs the Kabanero collection controller.
-func reconcileCollectionController(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, _ logr.Logger) error {
-	logger := cclog.WithValues("Kabanero instance namespace", k.Namespace, "Kabanero instance Name", k.Name)
-	logger.Info("Reconciling Kabanero collection controller installation.")
+func reconcileCollectionController(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
+	corlog.Info(fmt.Sprintf("Reconciling Kabanero collection controller installation. Kabanero instance namespace: %v. Kabanero instance Name: %v", k.Namespace, k.Name))
 
 	// Deploy the Kabanero collection operator.
 	rev, err := resolveSoftwareRevision(k, ccVersionSoftCompName, k.Spec.CollectionController.Version)
 	if err != nil {
-		logger.Error(err, "Kabanero collection controller deployment failed. Unable to resolve software revision.")
+		corlog.Error(err, "Kabanero collection controller deployment failed. Unable to resolve software revision.")
 		return err
 	}
 
 	templateCtx := rev.Identifiers
 	image, err := imageUriWithOverrides(k.Spec.CollectionController.Repository, k.Spec.CollectionController.Tag, k.Spec.CollectionController.Image, rev)
 	if err != nil {
-		logger.Error(err, "Kabanero collection controller deployment failed. Unable to process image overrides.")
+		corlog.Error(err, "Kabanero collection controller deployment failed. Unable to process image overrides.")
 		return err
 	}
 	templateCtx["image"] = image
@@ -56,7 +54,7 @@ func reconcileCollectionController(ctx context.Context, k *kabanerov1alpha2.Kaba
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), corlog)
 	if err != nil {
 		return err
 	}
@@ -92,7 +90,8 @@ func reconcileCollectionController(ctx context.Context, k *kabanerov1alpha2.Kaba
 		return err
 	}
 
-	mOrig, err = mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	//mOrig, err = mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(logger.WithName("manifestival")))
+	mOrig, err = ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), corlog)
 	if err != nil {
 		return err
 	}
@@ -108,8 +107,7 @@ func reconcileCollectionController(ctx context.Context, k *kabanerov1alpha2.Kaba
 // Removes the cross-namespace objects created during the collection controller
 // deployment.
 func cleanupCollectionController(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
-	logger := cclog.WithValues("Kabanero instance namespace", k.Namespace, "Kabanero instance Name", k.Name)
-	logger.Info("Removing Kabanero collection controller installation.")
+	corlog.Info(fmt.Sprintf("Removing Kabanero collection controller installation. Kabanero instance namespace: %v. Kabanero instance Name: %v", k.Namespace, k.Name))
 
 	// First, we need to delete all of the collections that we own.  We must do this first, to let the
 	// collection controller run its finalizer for all of the collections, before deleting the
@@ -129,7 +127,7 @@ func cleanupCollectionController(ctx context.Context, k *kabanerov1alpha2.Kabane
 					err = c.Delete(ctx, &collection)
 					if err != nil {
 						// Just log the error... but continue on to the next object.
-						logger.Error(err, "Unable to delete collection %v", collection.Name)
+						corlog.Error(err, fmt.Sprintf("Unable to delete collection %v", collection.Name))
 					}
 				}
 			}
@@ -155,7 +153,7 @@ func getCollectionControllerStatus(ctx context.Context, k *kabanerov1alpha2.Kaba
 	rev, err := resolveSoftwareRevision(k, ccVersionSoftCompName, k.Spec.CollectionController.Version)
 	if err != nil {
 		message := "Unable to retrieve the collection controller version."
-		cclog.Error(err, message)
+		corlog.Error(err, message)
 		k.Status.CollectionController.Message = message + ": " + err.Error()
 		return false, err
 	}
@@ -169,7 +167,7 @@ func getCollectionControllerStatus(ctx context.Context, k *kabanerov1alpha2.Kaba
 
 	if err != nil {
 		message := "Unable to retrieve the Kabanero collection controller deployment object."
-		cclog.Error(err, message)
+		corlog.Error(err, message)
 		k.Status.CollectionController.Message = message + ": " + err.Error()
 		return false, err
 	}

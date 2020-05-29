@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"runtime"
@@ -10,12 +11,15 @@ import (
 
 	"github.com/kabanero-io/kabanero-operator/pkg/apis"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/stack"
+	"github.com/operator-framework/operator-sdk/pkg/log/zap"
+	"github.com/spf13/pflag"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
+
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	pipelinev1alpha1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	//imagev1 "github.com/openshift/api/image/v1"
 )
@@ -56,7 +60,11 @@ func printStackControllerData() {
 }
 
 func main() {
-	logf.SetLogger(zap.Logger(false))
+	pflag.CommandLine.AddFlagSet(zap.FlagSet())
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	pflag.Set("zap-time-encoding", "iso8601")
+	pflag.Parse()
+	logf.SetLogger(zap.Logger())
 
 	printStackControllerData()
 
@@ -95,34 +103,42 @@ func main() {
 		os.Exit(1)
 	}
 
-// Use pr to work around issue
-// https://github.com/kubernetes-sigs/controller-runtime/issues/362
-// https://github.com/openshift/api/issues/270
-// https://github.com/openshift/api/pull/461
+	// Use pr to work around issue
+	// https://github.com/kubernetes-sigs/controller-runtime/issues/362
+	// https://github.com/openshift/api/issues/270
+	// https://github.com/openshift/api/pull/461
 	if err := AddToScheme(mgr.GetScheme()); err != nil {
 		log.Error(err, "")
 		os.Exit(1)
 	}
 
-/*
-	if err := imagev1.AddToScheme(mgr.GetScheme()); err != nil {
-		log.Error(err, "")
-		os.Exit(1)
-	}
-*/
+	/*
+		if err := imagev1.AddToScheme(mgr.GetScheme()); err != nil {
+			log.Error(err, "")
+			os.Exit(1)
+		}
+	*/
 	// Setup all Controllers
 	if err := stack.AddToManager(mgr); err != nil {
 		log.Error(err, "")
 		os.Exit(1)
 	}
 
-	log.Info("Starting the Cmd.")
+	log.Info("Seting up trace logger.")
+
+	ologger.SetTraceComponents(nil, mgr.GetAPIReader(), namespace, nil)
+	informer, _ := ologger.GetTraceConfigmapInformer(namespace)
+	stopChannel := make(chan struct{})
+	go informer.Run(stopChannel)
+	defer close(stopChannel)
 
 	// Start the Cmd
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
 		log.Error(err, "Manager exited non-zero")
 		os.Exit(1)
 	}
+
+	log.Info("Starting the Cmd.")
 }
 
 // Returns the namespace the stack controller is running in.

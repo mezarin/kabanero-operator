@@ -1,25 +1,26 @@
 package kabaneroplatform
+
 import (
 	"context"
 
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
-	
-	"github.com/go-logr/logr"
-	
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func reconcileTargetNamespaces(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client, reqLogger logr.Logger) error {
+var tnlog = ologger.NewOperatorlogger("controller.kabaneroplatform.targetnamespaces")
+
+func reconcileTargetNamespaces(ctx context.Context, k *kabanerov1alpha2.Kabanero, cl client.Client) error {
 
 	// Rolebinding Template
 	ownerIsController := true
 	rolebindingResource := rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kabanero-pipeline-deploy-rolebinding",
+			Name: "kabanero-pipeline-deploy-rolebinding",
 			OwnerReferences: []metav1.OwnerReference{
 				metav1.OwnerReference{
 					APIVersion: k.TypeMeta.APIVersion,
@@ -32,22 +33,21 @@ func reconcileTargetNamespaces(ctx context.Context, k *kabanerov1alpha2.Kabanero
 		},
 		Subjects: []rbacv1.Subject{
 			rbacv1.Subject{
-				Kind: "ServiceAccount",
-				Name: "kabanero-pipeline",
+				Kind:      "ServiceAccount",
+				Name:      "kabanero-pipeline",
 				Namespace: "kabanero",
 			},
 		},
 		RoleRef: rbacv1.RoleRef{
-			Kind: "ClusterRole",
-			Name: "kabanero-pipeline-deploy-role",
+			Kind:     "ClusterRole",
+			Name:     "kabanero-pipeline-deploy-role",
 			APIGroup: "rbac.authorization.k8s.io",
 		},
 	}
 
-
 	// List of Namespaces we want to bind
 	targetnamespaceList := k.Spec.TargetNamespaces
-	
+
 	// If targetNamespaces is empty, default to binding to kabanero
 	if len(targetnamespaceList) == 0 {
 		targetnamespaceList = append(targetnamespaceList, "kabanero")
@@ -55,7 +55,7 @@ func reconcileTargetNamespaces(ctx context.Context, k *kabanerov1alpha2.Kabanero
 
 	/* Get all Rolebindings named kabanero-pipeline-deploy-rolebinding
 		Structured method only lists RoleBindings in kabanero namespace. Maybe due to client scoping?
-		
+
 	rolebindingList := &rbacv1.RoleBindingList{}
 	err := cl.List(ctx, rolebindingList, client.MatchingFields{"metadata.name": "kabanero-pipeline-deploy-rolebinding"})
 	if err != nil {
@@ -81,17 +81,17 @@ func reconcileTargetNamespaces(ctx context.Context, k *kabanerov1alpha2.Kabanero
 		// If the Rolebinding namespace is in the targetNamespace list
 		for i, targetnamespace := range targetnamespaceList {
 			if rolebinding.GetNamespace() == targetnamespace {
-			
+
 				// Fill in the namespace for the template
 				desiredRolebinding := rolebindingResource
 				desiredRolebinding.ObjectMeta.Namespace = targetnamespace
-			
+
 				// Check if the existing Rolebinding matches the desired template, and skip?
 				// Update may handle this already
-				
+
 				// Apply the rolebinding
 				cl.Update(ctx, &desiredRolebinding)
-				
+
 				// Remove the namespace from the list of Namespaces remaining to bind
 				targetnamespaceList[i] = targetnamespaceList[len(targetnamespaceList)-1] // Copy last element to index i.
 				targetnamespaceList[len(targetnamespaceList)-1] = ""                     // Erase last element (write zero value).
@@ -107,17 +107,17 @@ func reconcileTargetNamespaces(ctx context.Context, k *kabanerov1alpha2.Kabanero
 			cl.Delete(ctx, &rolebinding)
 		}
 	}
-	
+
 	// For remaining namespaces in the list, Create the Rolebinding
 	for _, targetnamespace := range targetnamespaceList {
 		// Check if the namespace exists
 		namespace := &unstructured.Unstructured{}
 		namespace.SetGroupVersionKind(schema.GroupVersionKind{
-				Group:   "",
-				Kind:    "Namespace",
-				Version: "v1",
+			Group:   "",
+			Kind:    "Namespace",
+			Version: "v1",
 		})
-		err = cl.Get(ctx, client.ObjectKey{Namespace: targetnamespace, Name: targetnamespace,}, namespace)
+		err = cl.Get(ctx, client.ObjectKey{Namespace: targetnamespace, Name: targetnamespace}, namespace)
 		if err == nil {
 			// Fill in the namespace for the template and Create
 			desiredRolebinding := rolebindingResource
@@ -125,6 +125,6 @@ func reconcileTargetNamespaces(ctx context.Context, k *kabanerov1alpha2.Kabanero
 			cl.Create(ctx, &desiredRolebinding)
 		}
 	}
-	
+
 	return nil
 }

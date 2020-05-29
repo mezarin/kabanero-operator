@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-logr/logr"
 	"github.com/google/go-github/v29/github"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
 	sutils "github.com/kabanero-io/kabanero-operator/pkg/controller/stack/utils"
@@ -18,7 +17,7 @@ import (
 	rlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-var gitCachelog = rlog.Log.WithName("gitcache")
+var gclog = rlog.Log.WithName("controller.utils.cache.gitCache")
 
 // Value in the cache map.  This contains the etag returned from the remote
 // server, which is used on subsequent requests to use the cached data.
@@ -42,10 +41,10 @@ const gitTickerDuration = 30 * time.Minute
 var gitCacheLock sync.Mutex
 
 // Retrieves a stack index file content using GitHub APIs
-func GetStackDataUsingGit(c client.Client, gitRelease kabanerov1alpha2.GitReleaseInfo, skipCertVerification bool, namespace string, reqLogger logr.Logger) ([]byte, error) {
+func GetStackDataUsingGit(c client.Client, gitRelease kabanerov1alpha2.GitReleaseInfo, skipCertVerification bool, namespace string) ([]byte, error) {
 
 	// Get a Github client.
-	gclient, err := getGitClient(c, gitRelease, skipCertVerification, namespace, reqLogger)
+	gclient, err := getGitClient(c, gitRelease, skipCertVerification, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -60,12 +59,12 @@ func GetStackDataUsingGit(c client.Client, gitRelease kabanerov1alpha2.GitReleas
 }
 
 // Retrieves a Git client.
-func getGitClient(c client.Client, gitRelease kabanerov1alpha2.GitReleaseInfo, skipCertVerification bool, namespace string, reqLogger logr.Logger) (*github.Client, error) {
+func getGitClient(c client.Client, gitRelease kabanerov1alpha2.GitReleaseInfo, skipCertVerification bool, namespace string) (*github.Client, error) {
 	var client *github.Client
 
 	// Ignore the error that may come back from GetTLSConfig, and use the
 	// default TLS config.
-	tlsConfig, _ := GetTLSCConfig(c, skipCertVerification, gitCachelog)
+	tlsConfig, _ := GetTLSCConfig(c, skipCertVerification)
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
 
 	// Search all secrets under the given namespace for the one containing the required hostname.
@@ -78,7 +77,7 @@ func getGitClient(c client.Client, gitRelease kabanerov1alpha2.GitReleaseInfo, s
 
 	var pat []byte
 	if secret != nil {
-		reqLogger.Info(fmt.Sprintf("Secret used for secured GIT client requests: %v. Secret annotations: %v", secret.GetName(), secret.Annotations))
+		gclog.Info(fmt.Sprintf("Secret used for secured GIT client requests: %v. Secret annotations: %v", secret.GetName(), secret.Annotations))
 		pat, _ = secret.Data["password"]
 	}
 
@@ -119,7 +118,7 @@ func getReleaseAsset(gclient *github.Client, assets []github.ReleaseAsset, gitRe
 			cacheData, found := gitCache[path]
 			gitCacheLock.Unlock()
 			if found && isAssetUnchanged(cacheData, asset) {
-				gitCachelog.Info(fmt.Sprintf("Git data retrieved from cache. The data is associated with gitRelease containing: %v", path))
+				gclog.Info(fmt.Sprintf("Git data retrieved from cache. The data is associated with gitRelease containing: %v", path))
 				cacheData.lastUsed = time.Now()
 				return cacheData.data, nil
 			}
@@ -134,10 +133,10 @@ func getReleaseAsset(gclient *github.Client, assets []github.ReleaseAsset, gitRe
 			gitCacheLock.Lock()
 			if asset.GetID() != 0 && (asset.GetCreatedAt() != github.Timestamp{}) && (asset.GetSize() != 0) {
 				startPurgeTicker.Do(func() {
-					timer.ScheduleWork(gitTickerDuration, gitCachelog, gitPurgeCache, gitPurgeDuration)
+					timer.ScheduleWork(gitTickerDuration, gitPurgeCache, gitPurgeDuration)
 				})
 				gitCache[path] = gitCacheData{assetId: asset.GetID(), creationTime: asset.GetCreatedAt().Time, size: asset.GetSize(), data: indexBytes, lastUsed: time.Now()}
-				gitCachelog.Info(fmt.Sprintf("Git data cached. The data is associated with gitRelease containing: %v", path))
+				gclog.Info(fmt.Sprintf("Git data cached. The data is associated with gitRelease containing: %v", path))
 			} else {
 				delete(gitCache, path)
 			}
@@ -180,7 +179,7 @@ func gitPurgeCache(localPurgeDuration time.Duration) {
 	defer cacheLock.Unlock()
 	for key, _ := range gitCache {
 		if time.Since(gitCache[key].lastUsed) > localPurgeDuration {
-			gitCachelog.Info("Purging Git cache entry: " + key)
+			gclog.Info("Purging Git cache entry: " + key)
 			delete(gitCache, key)
 		}
 	}

@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	"github.com/kabanero-io/kabanero-operator/pkg/controller/utils/timer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	rlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-var cachelog = rlog.Log.WithName("httpcache")
+var httpclog = ologger.NewOperatorlogger("controller.utils.cache.httpcache")
 
 // Value in the cache map.  This contains the etag returned from the remote
 // server, which is used on subsequent requests to use the cached data.
@@ -64,7 +64,7 @@ func GetFromCache(c client.Client, url string, skipCertVerify bool) ([]byte, err
 	// Drive the request. Certificate validation is not disabled by default.
 	// Ignore the error from TLS config - if nil comes back, use the default.
 	transport := &http.Transport{DisableCompression: true}
-	tlsConfig, _ := GetTLSCConfig(c, skipCertVerify, cachelog)
+	tlsConfig, _ := GetTLSCConfig(c, skipCertVerify)
 
 	transport.TLSClientConfig = tlsConfig
 
@@ -83,7 +83,7 @@ func GetFromCache(c client.Client, url string, skipCertVerify bool) ([]byte, err
 
 	// Check to see if we're going to use the cached data.
 	if resp.StatusCode == http.StatusNotModified {
-		cachelog.Info(fmt.Sprintf("Retrieved from cache: %v", url))
+		httpclog.Info(fmt.Sprintf("Retrieved from cache: %v", url))
 
 		// Update the last used time so the entry does not get purged.
 		cacheData.lastUsed = time.Now()
@@ -112,10 +112,10 @@ func GetFromCache(c client.Client, url string, skipCertVerify bool) ([]byte, err
 	if (len(etag) > 0) && (len(date) > 0) {
 		// Before adding an entry to the cache, make sure the purge task is running.
 		startPurgeTicker.Do(func() {
-			timer.ScheduleWork(tickerDuration, cachelog, purgeCache, purgeDuration)
+			timer.ScheduleWork(tickerDuration, purgeCache, purgeDuration)
 		})
 		httpCache[url] = cacheValue{etag: etag, date: date, body: b, lastUsed: time.Now()}
-		cachelog.Info(fmt.Sprintf("Stored to cache: %v", url))
+		httpclog.Info(fmt.Sprintf("Stored to cache: %v", url))
 	} else {
 		// Take the entry out of the map if it's already there.
 		delete(httpCache, url)
@@ -130,7 +130,7 @@ func purgeCache(localPurgeDuration time.Duration) {
 	defer cacheLock.Unlock()
 	for key, _ := range httpCache {
 		if time.Since(httpCache[key].lastUsed) > localPurgeDuration {
-			cachelog.Info("Purging from cache: " + key)
+			httpclog.Info("Purging from cache: " + key)
 			delete(httpCache, key)
 		}
 	}

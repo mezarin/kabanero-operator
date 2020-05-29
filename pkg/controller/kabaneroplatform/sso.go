@@ -8,28 +8,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-logr/logr"
 	kabanerov1alpha2 "github.com/kabanero-io/kabanero-operator/pkg/apis/kabanero/v1alpha2"
-
+	ologger "github.com/kabanero-io/kabanero-operator/pkg/controller/logger"
 	mf "github.com/manifestival/manifestival"
-	mfc "github.com/manifestival/controller-runtime-client"
 	appsv1 "github.com/openshift/api/apps/v1"
-	kerrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	corev1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var ssolog = ologger.NewOperatorlogger("controller.kabaneropletform.sso")
 
 const (
-	sso_true string = "True"
-	sso_false string = "False"
-	sso_db_secret_name = "kabanero-sso-db-secret"
+	sso_true           string = "True"
+	sso_false          string = "False"
+	sso_db_secret_name        = "kabanero-sso-db-secret"
 )
 
-func reconcileSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
+func reconcileSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
 	if k.Spec.Sso.Enable == false {
-		return disableSso(ctx, k, c, reqLogger)
+		return disableSso(ctx, k, c)
 	}
 
 	// Figure out what version of the orchestration we are going to use.
@@ -38,13 +38,13 @@ func reconcileSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Cl
 	if err != nil {
 		return err
 	}
-	
+
 	// Go make sure that the necessary secret has been created.
-	err = checkSecret(ctx, k, c, reqLogger)
+	err = checkSecret(ctx, k, c)
 	if err != nil {
 		return err
 	}
-	
+
 	//The context which will be used to render any templates
 	templateContext := make(map[string]interface{})
 	templateContext["ssoAdminSecretName"] = k.Spec.Sso.AdminSecretName
@@ -63,7 +63,7 @@ func reconcileSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Cl
 		templateContext["postgreImage"] = "postgresql"
 	} else {
 		templateContext["postgreImage"] = postgreDeploymentConfigInstance.Spec.Template.Spec.Containers[0].Image
-		}
+	}
 
 	ssoDeploymentConfigInstance := &appsv1.DeploymentConfig{}
 	err = c.Get(context.Background(), types.NamespacedName{
@@ -77,7 +77,7 @@ func reconcileSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Cl
 	}
 
 	// Create DB secret if it does not exist
-	err = createDbSecret(k, c, reqLogger)
+	err = createDbSecret(k, c)
 	if err != nil {
 		return fmt.Errorf("Failed to create the SSO DB secret: %v", err.Error())
 	}
@@ -93,7 +93,8 @@ func reconcileSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Cl
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(reqLogger.WithName("manifestival")))
+	//mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(ssolog.Logger.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), ssolog)
 	if err != nil {
 		return err
 	}
@@ -112,18 +113,18 @@ func reconcileSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Cl
 	if err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
 // Checks to make sure the secret required by the SSO configuration has
 // been created and contains the required keys.
-func checkSecret(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
+func checkSecret(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
 
 	if len(k.Spec.Sso.AdminSecretName) == 0 {
 		return errors.New("The SSO admin secret name must be specified in the Kabanero CR instance")
 	}
-	
+
 	secretInstance := &corev1.Secret{}
 	err := c.Get(context.Background(), types.NamespacedName{
 		Name:      k.Spec.Sso.AdminSecretName,
@@ -152,18 +153,18 @@ func checkSecret(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Cli
 	if (!ok) || (len(ssoRealm) == 0) {
 		return fmt.Errorf("The SSO admin secret %v does not contain key 'realm'", k.Spec.Sso.AdminSecretName)
 	}
-	
+
 	return nil
 }
 
-func disableSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
+func disableSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Client) error {
 	// Figure out what version of the orchestration we are going to use.
 	noOverrideVersion := ""
 	rev, err := resolveSoftwareRevision(k, "sso", noOverrideVersion)
 	if err != nil {
 		return err
 	}
-	
+
 	// The context which will be used to render any templates.  Note that
 	// since we're just going to delete things, these values don't matter
 	// too much.
@@ -172,7 +173,7 @@ func disableSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Clie
 	templateContext["ssoDbSecretName"] = sso_db_secret_name
 	templateContext["instance"] = k.ObjectMeta.UID
 	templateContext["version"] = rev.Version
-	
+
 	f, err := rev.OpenOrchestration("sso.yaml")
 	if err != nil {
 		return err
@@ -183,7 +184,8 @@ func disableSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Clie
 		return err
 	}
 
-	mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(reqLogger.WithName("manifestival")))
+	//mOrig, err := mf.ManifestFrom(mf.Reader(strings.NewReader(s)), mf.UseClient(mfc.NewClient(c)), mf.UseLogger(ssolog.Logger.WithName("manifestival")))
+	mOrig, err := ologger.ManifestFrom(c, mf.Reader(strings.NewReader(s)), ssolog)
 	if err != nil {
 		return err
 	}
@@ -198,11 +200,11 @@ func disableSso(ctx context.Context, k *kabanerov1alpha2.Kabanero, c client.Clie
 	}
 
 	_ = m.Delete()
-	
+
 	return nil
 }
 
-func getSsoStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) (bool, error) {
+func getSsoStatus(k *kabanerov1alpha2.Kabanero, c client.Client) (bool, error) {
 	// If SSO is not enabled, then there is no status to report.
 	if k.Spec.Sso.Enable == false {
 		k.Status.Sso.Configured = sso_false
@@ -216,7 +218,7 @@ func getSsoStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.
 	k.Status.Sso.Ready = sso_false
 	k.Status.Sso.Message = ""
 
-	err := checkSecret(context.Background(), k, c, reqLogger)
+	err := checkSecret(context.Background(), k, c)
 	if err != nil {
 		k.Status.Sso.Message = err.Error()
 		return false, err
@@ -240,7 +242,7 @@ func getSsoStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.
 			}
 		}
 	}
-	
+
 	// Determine if the postgressl SSO components are available.
 	postgreDeploymentConfigInstance := &appsv1.DeploymentConfig{}
 	err = c.Get(context.Background(), types.NamespacedName{
@@ -304,7 +306,7 @@ func getSsoStatus(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.
 }
 
 // Creates the secret containing DB_USERNAME, DB_PASSWORD, JGROUPS_CLUSTER_PASSWORD
-func createDbSecret(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger logr.Logger) error {
+func createDbSecret(k *kabanerov1alpha2.Kabanero, c client.Client) error {
 
 	// Check if the Secret already exists.
 	secretInstance := &corev1.Secret{}
@@ -319,7 +321,7 @@ func createDbSecret(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger log
 
 		// Not found.  Make a new one.
 		var ownerRef metav1.OwnerReference
-		ownerRef, err = getOwnerReference(k, c, reqLogger)
+		ownerRef, err = getOwnerReference(k, c)
 		if err != nil {
 			return err
 		}
@@ -333,16 +335,15 @@ func createDbSecret(k *kabanerov1alpha2.Kabanero, c client.Client, reqLogger log
 		secretMap["DB_USERNAME"] = randSecret(16)
 		secretMap["DB_PASSWORD"] = randSecret(32)
 		secretMap["JGROUPS_CLUSTER_PASSWORD"] = randSecret(32)
-		
+
 		secretInstance.StringData = secretMap
 
-		reqLogger.Info(fmt.Sprintf("Attempting to create the SSO DB secret"))
+		ssolog.Info(fmt.Sprintf("Attempting to create the SSO DB secret"))
 		err = c.Create(context.TODO(), secretInstance)
 	}
 
 	return err
 }
-
 
 // Generate a random username, password
 // Rules: Minimum Length: 9, 2 Digits, 2 Uppers, 2 Lowers
@@ -367,11 +368,11 @@ func randSecret(length int) string {
 	buf[4] = uppers[rand.Intn(len(uppers))]
 	buf[5] = uppers[rand.Intn(len(uppers))]
 	for i := 6; i < length; i++ {
-			buf[i] = all[rand.Intn(len(all))]
+		buf[i] = all[rand.Intn(len(all))]
 	}
 	rand.Shuffle(len(buf), func(i, j int) {
-			buf[i], buf[j] = buf[j], buf[i]
+		buf[i], buf[j] = buf[j], buf[i]
 	})
-	
+
 	return string(buf)
 }
